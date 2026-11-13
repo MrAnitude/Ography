@@ -473,7 +473,7 @@ Progress is tracked here. The order matters: correctness before speed.
 - [ ] **10b. Next kernels:** a fused tensor-core W4A16 GEMM for 9-100-token INT4 prefills
   (now ~60 ms flat on 7B via dequant + cuBLAS); decode attention for large GQA groups is
   compute-bound (Qwen 7B: 150 vs 200 GB/s)
-- [ ] **11. Stretch:** speculative decoding (draft model / n-gram), structured (JSON) output
+- ~~**11. Stretch:** speculative decoding, structured (JSON) output~~ (dropped: not needed)
 
 ## Conventions
 
