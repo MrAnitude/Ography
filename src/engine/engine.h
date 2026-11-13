@@ -50,6 +50,8 @@ using TokenCallback = std::function<bool(const TokenEvent&)>;
 //
 // generate(): reuse cached prefix -> chunked prefill of the rest -> decode loop
 //             (graph replay, sample on GPU, copy 1 token back, detokenize, stop check).
+// The KV cache is kept between requests: a prompt that starts with the previous request's
+// prompt + completion (a chat's next turn) only prefills what's new.
 class Engine {
  public:
   explicit Engine(const EngineConfig& config);
@@ -63,6 +65,9 @@ class Engine {
   const ChatTemplate& chat_template() const;
   const std::string& model_name() const;  // the model directory's name
   int max_seq_len() const;                // KV cache capacity in tokens
+
+  // Forgets the cached prefix, so the next request prefills its whole prompt.
+  void clear_cache();
 
  private:
   struct Impl;

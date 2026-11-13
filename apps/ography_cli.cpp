@@ -52,6 +52,7 @@ struct Options {
                "  --raw                   completion mode even if the model has a chat template\n"
                "  --max-seq-len N         context length, default as large as fits\n"
                "  --prefill-chunk N       default 2048\n"
+               "  --no-cuda-graphs        decode without graph replay (debugging)\n"
                "In chat: /reset clears the conversation, /quit exits.\n",
                argv0);
   std::exit(code);
@@ -80,6 +81,7 @@ Options parse(int argc, char** argv) {
     else if (a == "--raw") o.raw = true;
     else if (a == "--max-seq-len") o.engine.max_seq_len = std::stoi(next());
     else if (a == "--prefill-chunk") o.engine.prefill_chunk = std::stoi(next());
+    else if (a == "--no-cuda-graphs") o.engine.use_cuda_graphs = false;
     else if (a == "-h" || a == "--help") usage(argv[0], 0);
     else {
       std::fprintf(stderr, "unknown option %s\n", a.c_str());
@@ -112,9 +114,10 @@ std::string reply(Engine& engine, const std::vector<int32_t>& prompt, const Samp
   });
   std::printf("\n");
   std::fflush(stdout);
-  std::fprintf(stderr, "%s[%d+%d tokens, TTFT %.0f ms, %.1f tok/s, %s]%s\n", tty ? "\033[2m" : "",
-               r.prompt_tokens, r.completion_tokens, r.time_to_first_token_ms, r.tokens_per_second,
-               finish_name(r.finish_reason), tty ? "\033[0m" : "");
+  std::fprintf(stderr, "%s[%d+%d tokens (%d cached), TTFT %.0f ms, %.1f tok/s, %s]%s\n",
+               tty ? "\033[2m" : "", r.prompt_tokens, r.completion_tokens, r.cached_prompt_tokens,
+               r.time_to_first_token_ms, r.tokens_per_second, finish_name(r.finish_reason),
+               tty ? "\033[0m" : "");
   return text;
 }
 

@@ -110,8 +110,9 @@ struct HttpServer::Impl {
       --in_flight;
       if (r.finish_reason == FinishReason::Cancelled) ++cancelled;
       char msg[256];
-      std::snprintf(msg, sizeof msg, "%s: %d+%d tokens, TTFT %.0f ms, %.1f tok/s, %s",
-                    what.c_str(), r.prompt_tokens, r.completion_tokens, r.time_to_first_token_ms,
+      std::snprintf(msg, sizeof msg, "%s: %d+%d tokens (%d cached), TTFT %.0f ms, %.1f tok/s, %s",
+                    what.c_str(), r.prompt_tokens, r.completion_tokens, r.cached_prompt_tokens,
+                    r.time_to_first_token_ms,
                     r.tokens_per_second,
                     r.finish_reason == FinishReason::Cancelled
                         ? "cancelled"

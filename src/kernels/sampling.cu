@@ -81,8 +81,11 @@ __device__ float search_threshold(Pred pred) {
 }
 
 __global__ void __launch_bounds__(kThreads)
-    sample_kernel(const float* __restrict__ logits, int n, SamplingKernelParams params,
-                  float* __restrict__ probs, int32_t* __restrict__ out) {
+    sample_kernel(const float* __restrict__ logits, int n, SamplingKernelParams host_params,
+                  SamplingKernelParams* d_params, float* __restrict__ probs,
+                  int32_t* __restrict__ out) {
+  // Every thread reads the params before any barrier; thread 0 bumps the step at the end.
+  const SamplingKernelParams params = d_params != nullptr ? *d_params : host_params;
   __shared__ TempStorage tmp;
   __shared__ float fb;
   __shared__ int ib;
@@ -101,7 +104,10 @@ __global__ void __launch_bounds__(kThreads)
   __syncthreads();
 
   if (params.temperature <= 0.f || params.top_k == 1) {
-    if (threadIdx.x == 0) *out = argmax;
+    if (threadIdx.x == 0) {
+      *out = argmax;
+      if (d_params != nullptr) d_params->step = params.step + 1;
+    }
     return;
   }
 
@@ -154,14 +160,23 @@ __global__ void __launch_bounds__(kThreads)
     ib = pick;  // exactly one thread's slice contains u
   }
   __syncthreads();
-  if (threadIdx.x == 0) *out = ib;
+  if (threadIdx.x == 0) {
+    *out = ib;
+    if (d_params != nullptr) d_params->step = params.step + 1;
+  }
 }
 
 __global__ void penalties_kernel(float* __restrict__ logits, const int8_t* __restrict__ prompt,
                                  const int32_t* __restrict__ counts, int n, float repetition,
-                                 float presence, float frequency) {
+                                 float presence, float frequency,
+                                 const SamplingKernelParams* __restrict__ d_params) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= n) return;
+  if (d_params != nullptr) {
+    repetition = d_params->repetition;
+    presence = d_params->presence;
+    frequency = d_params->frequency;
+  }
+  if (i >= n || (repetition == 1.f && presence == 0.f && frequency == 0.f)) return;
   const int c = counts[i];
   float l = logits[i];
   if (repetition != 1.f && (c > 0 || prompt[i])) l = l > 0.f ? l / repetition : l * repetition;
@@ -191,7 +206,18 @@ void sample(const Tensor& logits, const SamplingKernelParams& params, int32_t* d
   if (logits.dtype() != DType::F32) throw std::invalid_argument("sample: logits must be f32");
   check_vocab(logits, scratch, DType::F32, "sample: scratch");
   sample_kernel<<<1, kThreads, 0, stream>>>(logits.data_as<const float>(),
-                                            static_cast<int>(logits.numel()), params,
+                                            static_cast<int>(logits.numel()), params, nullptr,
+                                            scratch.data_as<float>(), d_out_token);
+  CUDA_CHECK_LAUNCH();
+}
+
+void sample(const Tensor& logits, SamplingKernelParams* d_params, int32_t* d_out_token,
+            Tensor& scratch, cudaStream_t stream) {
+  if (logits.dtype() != DType::F32) throw std::invalid_argument("sample: logits must be f32");
+  check_vocab(logits, scratch, DType::F32, "sample: scratch");
+  sample_kernel<<<1, kThreads, 0, stream>>>(logits.data_as<const float>(),
+                                            static_cast<int>(logits.numel()),
+                                            SamplingKernelParams{}, d_params,
                                             scratch.data_as<float>(), d_out_token);
   CUDA_CHECK_LAUNCH();
 }
@@ -203,7 +229,18 @@ void apply_penalties(Tensor& logits, const Tensor& prompt_mask, const Tensor& ou
   const int n = static_cast<int>(logits.numel());
   penalties_kernel<<<(n + 255) / 256, 256, 0, stream>>>(
       logits.data_as<float>(), prompt_mask.data_as<const int8_t>(),
-      output_counts.data_as<const int32_t>(), n, repetition, presence, frequency);
+      output_counts.data_as<const int32_t>(), n, repetition, presence, frequency, nullptr);
+  CUDA_CHECK_LAUNCH();
+}
+
+void apply_penalties(Tensor& logits, const Tensor& prompt_mask, const Tensor& output_counts,
+                     const SamplingKernelParams* d_params, cudaStream_t stream) {
+  check_vocab(logits, prompt_mask, DType::I8, "apply_penalties: prompt_mask");
+  check_vocab(logits, output_counts, DType::I32, "apply_penalties: output_counts");
+  const int n = static_cast<int>(logits.numel());
+  penalties_kernel<<<(n + 255) / 256, 256, 0, stream>>>(
+      logits.data_as<float>(), prompt_mask.data_as<const int8_t>(),
+      output_counts.data_as<const int32_t>(), n, 1.f, 0.f, 0.f, d_params);
   CUDA_CHECK_LAUNCH();
 }
 

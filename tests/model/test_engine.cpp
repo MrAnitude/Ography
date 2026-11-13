@@ -174,3 +174,76 @@ TEST(EngineChunkedPrefill, MatchesHF) {
   std::printf("    460-token prompt: TTFT %.1f ms, %.0f tok/s\n",
               run.result.time_to_first_token_ms, run.result.tokens_per_second);
 }
+
+// ---- CUDA graphs and prefix reuse ----------------------------------------------------------
+
+namespace {
+
+std::unique_ptr<Engine> make_engine(bool graphs) {
+  EngineConfig cfg;
+  cfg.model_dir = gpt2_dir();
+  cfg.use_cuda_graphs = graphs;
+  return std::make_unique<Engine>(cfg);
+}
+
+}  // namespace
+
+TEST_F(EngineTest, GraphReplayMatchesEager) {
+  auto eager = make_engine(/*graphs=*/false);
+  SamplingParams sampled;
+  sampled.temperature = 0.9f;
+  sampled.top_k = 50;
+  sampled.top_p = 0.9f;
+  sampled.repetition_penalty = 1.2f;
+  sampled.seed = 77;
+  sampled.max_tokens = 48;
+  for (const SamplingParams& sp : {greedy(48), sampled}) {
+    engine_->clear_cache();
+    eager->clear_cache();
+    EXPECT_EQ(generate(*engine_, prompt_, sp).ids, generate(*eager, prompt_, sp).ids);
+  }
+}
+
+TEST_F(EngineTest, PrefixReuseAcrossTurns) {
+  // Turn 1, then a turn-2 prompt that extends turn 1's prompt + completion.
+  engine_->clear_cache();
+  const GenRun turn1 = generate(*engine_, prompt_, greedy(16));
+  std::vector<int32_t> prompt2 = prompt_;
+  prompt2.insert(prompt2.end(), turn1.ids.begin(), turn1.ids.end());
+  const auto more = engine_->tokenizer().encode(" Meanwhile, in Berlin,");
+  prompt2.insert(prompt2.end(), more.begin(), more.end());
+
+  const GenRun warm = generate(*engine_, prompt2, greedy(16));
+  // Everything fed through the model last time is reused: the prompt and all generated tokens
+  // except the last (sampled, never fed back).
+  EXPECT_EQ(warm.result.cached_prompt_tokens, static_cast<int>(prompt_.size() + 15));
+
+  engine_->clear_cache();
+  const GenRun cold = generate(*engine_, prompt2, greedy(16));
+  EXPECT_EQ(cold.result.cached_prompt_tokens, 0);
+  EXPECT_EQ(warm.ids, cold.ids);
+
+  // A prompt that diverges early reuses only the common prefix.
+  generate(*engine_, prompt2, greedy(2));
+  std::vector<int32_t> other = {prompt_[0], prompt_[1], 50, 60, 70};
+  EXPECT_EQ(generate(*engine_, other, greedy(2)).result.cached_prompt_tokens, 2);
+
+  // Repeating a prompt exactly still prefills its last token, to get fresh logits.
+  EXPECT_EQ(generate(*engine_, other, greedy(2)).result.cached_prompt_tokens, 4);
+}
+
+TEST_F(EngineTest, PrefixReuseKeepsPenaltiesExact) {
+  // Repetition penalty covers the prompt, including the reused part of it.
+  SamplingParams sp = greedy(16);
+  sp.repetition_penalty = 1.3f;
+  std::vector<int32_t> prompt2 = prompt_;
+  const auto more = engine_->tokenizer().encode(" and the capital of Germany is");
+  prompt2.insert(prompt2.end(), more.begin(), more.end());
+
+  engine_->clear_cache();
+  generate(*engine_, prompt_, greedy(1));  // caches the first 5 tokens
+  const GenRun warm = generate(*engine_, prompt2, sp);
+  EXPECT_EQ(warm.result.cached_prompt_tokens, 5);
+  engine_->clear_cache();
+  EXPECT_EQ(generate(*engine_, prompt2, sp).ids, warm.ids);
+}

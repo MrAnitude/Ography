@@ -9,8 +9,8 @@ OpenAI clients and tools work against it unchanged.
 > **Status: early.** GPT-2 and the Llama family (Llama 3.x, Qwen2/2.5, Mistral) run end to
 > end, matching HF `transformers` layer by layer and token for token, with the tokenizer and
 > chat templates matching HF exactly. They are served through an OpenAI-compatible API
-> (`ography_server`) or a terminal chat (`ography_cli`). Next up is latency work (prefix reuse,
-> CUDA graphs). See the [roadmap](#roadmap) for progress.
+> (`ography_server`) or a terminal chat (`ography_cli`), reusing the KV cache across chat
+> turns. See the [roadmap](#roadmap) for progress.
 
 ---
 
@@ -268,6 +268,7 @@ If CMake can't find `nvcc`, pass `-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
 | `--max-seq-len N` | Context length; default is as large as free VRAM allows |
 | `--prefill-chunk N` | Longest prompt slice per forward pass (default 2048) |
 | `--vram-fraction F` | Share of free VRAM to claim (default 0.92) |
+| `--no-cuda-graphs` | Decode without graph replay (debugging) |
 | `--api-key KEY` | Require `Authorization: Bearer KEY` on `/v1/*` (or set `OGRAPHY_API_KEY`) |
 
 Endpoints: `POST /v1/chat/completions`, `POST /v1/completions` (both streaming and not),
@@ -420,9 +421,13 @@ Progress is tracked here. The order matters: correctness before speed.
   strings/tokens, `Engine::generate` with VRAM-sized KV cache and chunked prefill, `ography_cli`
 - [x] **7. Server:** OpenAI chat / completions / models endpoints, SSE streaming, cancellation on
   disconnect, API key auth; checked with the official `openai` Python SDK
-- [ ] **8. Latency:** prefix reuse across turns, CUDA-graph decode, fused add+RMSNorm
+- [x] **8. Latency:** prefix reuse across turns (a follow-up question on a 5.6K-token document:
+  TTFT 2.7 s -> 34 ms), CUDA-graph decode (captured once at load; ~1% at 1-2B where launches
+  already overlap), fused add+RMSNorm
 - [ ] **9. Memory:** FP8 KV cache, INT4 weight loading (AWQ/GPTQ), FP8 weights
-- [ ] **10. Custom kernels:** FlashAttention-style prefill, split-K decode attention, W4A16 GEMV replacing cuBLAS for decode
+- [ ] **10. Custom kernels:** FlashAttention-style prefill, split-K decode attention, W4A16 GEMV replacing cuBLAS for decode.
+  Priority: the naive attention dominates at long context (Llama 3.2 1B at ~5.6K tokens:
+  prefill ~2K tok/s, decode 93 -> 42 tok/s)
 - [ ] **11. Stretch:** speculative decoding (draft model / n-gram), structured (JSON) output
 
 ## Conventions

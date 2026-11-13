@@ -88,6 +88,9 @@ struct SamplingKernelParams {
   float min_p = 0.0f;        // 0 => disabled; keeps p >= min_p * p_max
   uint64_t seed = 0;
   uint64_t step = 0;  // Philox subsequence: one independent random draw per (seed, step)
+  float repetition = 1.0f;  // penalties (see apply_penalties); neutral values => no-op
+  float presence = 0.0f;
+  float frequency = 0.0f;
 };
 
 // logits [vocab] f32 -> one token id written to d_out_token. Filters apply in HF order:
@@ -96,6 +99,10 @@ struct SamplingKernelParams {
 // applied beforehand with apply_penalties. One block; no host sync.
 void sample(const Tensor& logits, const SamplingKernelParams& params, int32_t* d_out_token,
             Tensor& scratch, cudaStream_t stream);
+// CUDA-graph form: params are read from device memory when the kernel runs, and d_params->step
+// is incremented afterwards, so one captured graph serves every step of every request.
+void sample(const Tensor& logits, SamplingKernelParams* d_params, int32_t* d_out_token,
+            Tensor& scratch, cudaStream_t stream);
 
 // In-place on logits [vocab] f32, as in vLLM:
 //   repetition (HF-style, divides positive / multiplies negative logits) for tokens seen in
@@ -103,6 +110,9 @@ void sample(const Tensor& logits, const SamplingKernelParams& params, int32_t* d
 //   presence and frequency (OpenAI-style, subtracted) from output_counts only.
 void apply_penalties(Tensor& logits, const Tensor& prompt_mask, const Tensor& output_counts,
                      float repetition, float presence, float frequency, cudaStream_t stream);
+// CUDA-graph form reading the penalties from device memory; a no-op when they are neutral.
+void apply_penalties(Tensor& logits, const Tensor& prompt_mask, const Tensor& output_counts,
+                     const SamplingKernelParams* d_params, cudaStream_t stream);
 
 // prompt_mask[ids[i]] = 1 for each prompt token (mask must be zeroed first).
 void mark_tokens(const Tensor& ids, Tensor& prompt_mask, cudaStream_t stream);
