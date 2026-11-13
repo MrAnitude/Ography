@@ -5,7 +5,7 @@
 
 namespace ography {
 
-LlamaModel::LlamaModel(ModelConfig config, ModelWeights weights, DeviceArena& scratch_arena,
+LlamaModel::LlamaModel(ModelConfig config, LlamaWeights weights, DeviceArena& scratch_arena,
                        cublasHandle_t cublas)
     : config_(std::move(config)), weights_(std::move(weights)), cublas_(cublas) {
   // TODO: allocate scratch activations, compute inv_freq_.

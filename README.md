@@ -33,7 +33,8 @@ OpenAI clients and tools work against it unchanged.
 
 **Goals**
 - Lowest possible latency for **one client**: time-to-first-token and time per output token.
-- Run off-the-shelf Hugging Face decoder models (Llama-family first: Llama, Mistral, Qwen2).
+- Run off-the-shelf Hugging Face decoder models. GPT-2 (`openai-community/gpt2`) is the
+  bring-up model; the Llama family (Llama, Mistral, Qwen2) follows as the daily-use target.
 - Own the full stack: weight loading, kernels, tokenizer, sampling, and HTTP server.
 - Be numerically verified against HF `transformers`, layer by layer.
 
@@ -51,7 +52,7 @@ OpenAI clients and tools work against it unchanged.
 | Compute capability | `sm_89` (native FP8 tensor cores) |
 | VRAM | 8 GB |
 | Memory bandwidth | ~256 GB/s |
-| Toolchain | CUDA 13.2, GCC 13, CMake ≥ 3.24 |
+| Toolchain | CUDA ≥ 12.4 (tested with 13.5), GCC 13, CMake ≥ 3.24 |
 
 At batch size 1, decoding is **memory-bandwidth bound**: every generated token reads every
 weight once. Token rate is therefore capped near `bandwidth / model bytes`. For example, an
@@ -151,7 +152,7 @@ tokenizer (CPU only) ◄── engine
 | `kernels` | `kernels::rmsnorm`, `attention_decode`, `gemm`, … | All GPU compute. Async, stream-ordered, CUDA-graph safe |
 | `kv_cache` | `KVCache`, `PrefixTracker` | Per-layer K/V storage; reusing cached prompt prefixes |
 | `quant` | `QuantConfig`, `QuantizedWeight` | Describes quantized checkpoint formats |
-| `model` | `ModelConfig`, `SafetensorsModel`, `ModelWeights`, `Model` | Loading, mapping and running a transformer |
+| `model` | `ModelConfig`, `SafetensorsModel`, `Gpt2Weights` / `LlamaWeights`, `Model` | Loading, mapping and running a transformer |
 | `tokenizer` | `Tokenizer`, `IncrementalDecoder`, `ChatTemplate` | Text ↔ token ids, prompt formatting |
 | `engine` | `Engine`, `SamplingParams`, `StopChecker`, `DecodeGraph`, `RequestQueue` | The prefill/decode loop and its control flow |
 | `server` | `HttpServer`, `openai::*`, `sse::*` | OpenAI-compatible HTTP surface |
@@ -178,11 +179,15 @@ sudo apt install -y cuda-toolkit-13-2 ninja-build
 Then add it to your shell (`~/.bashrc`):
 
 ```sh
-export PATH=/usr/local/cuda-13.2/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64:$LD_LIBRARY_PATH
+export PATH=/usr/local/cuda/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 ```
 
 Verify with `nvcc --version`.
+
+The toolkit may be newer than the CUDA version `nvidia-smi` reports (e.g. toolkit 13.5 on a
+13.2 driver). That works within the same major version because the build compiles native
+`sm_89` code, so no PTX JIT by the older driver is needed.
 
 ### 3. Build tools
 
@@ -239,7 +244,7 @@ cmake --build build
 | `OGRAPHY_BUILD_TESTS` | `ON` | Build `unit_tests`, `kernel_tests`, `golden_tests` |
 | `OGRAPHY_BUILD_BENCH` | `ON` | Build `bench_kernels` |
 
-If CMake can't find `nvcc`, pass `-DCMAKE_CUDA_COMPILER=/usr/local/cuda-13.2/bin/nvcc`.
+If CMake can't find `nvcc`, pass `-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc`.
 
 `compile_commands.json` is generated in `build/` for clangd and other IDE tooling.
 
@@ -357,7 +362,8 @@ KV cache size per token = `2 × layers × kv_heads × head_dim × bytes_per_elem
 
 Progress is tracked here. The order matters: correctness before speed.
 
-- [ ] **1. Foundations:** `Tensor`, `DeviceArena`, safetensors loader, `ModelConfig`, weight mapping
+- [x] **1. Foundations:** `Tensor`, `DeviceArena`, safetensors loader, `ModelConfig`, GPT-2 weight mapping
+  (Llama weight mapping comes with the Llama model)
 - [ ] **2. Kernels:** embedding, RMSNorm, RoPE, SwiGLU, attention (naive first), cuBLAS GEMM, each with tests
 - [ ] **3. Forward pass:** `LlamaModel::forward` with KV cache, prefill + decode
 - [ ] **4. Golden tests:** `dump_golden.py`, then layer-by-layer agreement with HF

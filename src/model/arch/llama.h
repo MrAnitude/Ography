@@ -15,7 +15,7 @@ namespace ography {
 //               -> add_rmsnorm -> w_gate_up -> swiglu -> w_down
 class LlamaModel final : public Model {
  public:
-  LlamaModel(ModelConfig config, ModelWeights weights, DeviceArena& scratch_arena,
+  LlamaModel(ModelConfig config, LlamaWeights weights, DeviceArena& scratch_arena,
              cublasHandle_t cublas);
 
   void forward(const ForwardInput& input, KVCache& kv_cache, Tensor& logits,
@@ -24,7 +24,7 @@ class LlamaModel final : public Model {
 
  private:
   ModelConfig config_;
-  ModelWeights weights_;
+  LlamaWeights weights_;
   cublasHandle_t cublas_;
   Tensor inv_freq_;  // precomputed rope frequencies (with rope_scaling applied)
   // TODO: activation scratch buffers sized for max prefill chunk.
