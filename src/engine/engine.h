@@ -36,10 +36,10 @@ struct TokenEvent {
 struct GenerationResult {
   FinishReason finish_reason = FinishReason::Stop;
   int prompt_tokens = 0;
-  int completion_tokens = 0;
+  int completion_tokens = 0;     // includes a final stop token, as OpenAI counts it
   int cached_prompt_tokens = 0;  // reused from the previous turn's KV cache
   double time_to_first_token_ms = 0;
-  double tokens_per_second = 0;
+  double tokens_per_second = 0;  // decode rate, after the first token
 };
 
 // Return false to cancel (e.g. the HTTP client disconnected).
@@ -55,11 +55,14 @@ class Engine {
   explicit Engine(const EngineConfig& config);
   ~Engine();
 
+  // Throws std::invalid_argument if the prompt is empty or doesn't fit in the context.
+  // max_tokens is clamped so prompt + completion fits.
   GenerationResult generate(const GenerationRequest& request, const TokenCallback& on_token);
 
-  Tokenizer& tokenizer();
-  ChatTemplate& chat_template();
-  const std::string& model_name() const;
+  const Tokenizer& tokenizer() const;
+  const ChatTemplate& chat_template() const;
+  const std::string& model_name() const;  // the model directory's name
+  int max_seq_len() const;                // KV cache capacity in tokens
 
  private:
   struct Impl;

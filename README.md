@@ -6,10 +6,10 @@ single-user inference** on a consumer laptop GPU. It loads Hugging Face checkpoi
 kernels, and serves the model through an **OpenAI-compatible HTTP API** so existing
 OpenAI clients and tools work against it unchanged.
 
-> **Status: early.** GPT-2 runs end to end on the GPU (prefill + decode with a KV cache) and
-> matches HF `transformers` layer by layer; the tokenizer matches HF `tokenizers` exactly.
-> The generation loop, server and Llama are still `OGRAPHY_TODO(...)` stubs that abort with
-> their file and line if called. See the [roadmap](#roadmap) for build order and progress.
+> **Status: early.** GPT-2 generates text end to end (`ography_cli`), matching HF
+> `transformers` layer by layer and token for token; the tokenizer matches HF `tokenizers`
+> exactly. The HTTP server and Llama-family models are still `OGRAPHY_TODO(...)` stubs that
+> abort with their file and line if called. See the [roadmap](#roadmap) for progress.
 
 ---
 
@@ -254,8 +254,8 @@ If CMake can't find `nvcc`, pass `-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
 
 ## Running
 
-> The commands below describe the intended interface. They abort with a `TODO` message
-> until the engine is implemented.
+> `ography_cli` works today with GPT-2. The server (step 7) and Llama-family models (step 3b)
+> still abort with a `TODO` message.
 
 ### Server
 
@@ -298,8 +298,16 @@ proxy (e.g. Caddy) in front and set `--api-key`.
 ### Terminal chat
 
 ```sh
-./build/apps/ography_cli --model models/qwen2.5-1.5b --temperature 0.7
+./build/apps/ography_cli --model models/gpt2                 # completion mode (no chat template)
+./build/apps/ography_cli --model models/qwen2.5-1.5b --temperature 0.7   # chat (after step 3b)
 ```
+
+Models with a chat template get a multi-turn chat (`/reset` clears it); models without one,
+like GPT-2, get completion mode, where each line is a prompt to continue. Ctrl-C stops a
+reply. Options: `--temperature`, `--greedy`, `--top-k`, `--top-p`, `--min-p`,
+`--repetition-penalty`, `--max-tokens`, `--seed`, `--system`, `--raw`, `--max-seq-len`,
+`--prefill-chunk` (`--help` for defaults). After each reply it prints prompt+completion
+tokens, time to first token and decode tokens/s.
 
 ## Testing
 
@@ -400,7 +408,8 @@ Progress is tracked here. The order matters: correctness before speed.
 - [x] **5. Tokenizer:** byte-level BPE (GPT-2, Llama 3, Qwen2 pretokenizers), special tokens,
   ChatML / Llama 3 chat templates, incremental UTF-8 decoding; all matching HF exactly
   (NFC normalization and tool calls not yet)
-- [ ] **6. Generation:** sampling kernels, stop handling, `Engine::generate`, `ography_cli`
+- [x] **6. Generation:** GPU sampling (greedy, temperature, top-k/p, min-p, penalties), stop
+  strings/tokens, `Engine::generate` with VRAM-sized KV cache and chunked prefill, `ography_cli`
 - [ ] **7. Server:** OpenAI endpoints, SSE streaming, cancellation on disconnect
 - [ ] **8. Latency:** prefix reuse across turns, CUDA-graph decode, fused add+RMSNorm
 - [ ] **9. Memory:** FP8 KV cache, INT4 weight loading (AWQ/GPTQ), FP8 weights

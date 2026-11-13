@@ -12,14 +12,15 @@
 namespace ography {
 
 std::unique_ptr<Model> load_model(const std::string& model_dir, DeviceArena& arena,
-                                  cublasHandle_t cublas) {
+                                  cublasHandle_t cublas, int max_tokens) {
   ModelConfig config =
       ModelConfig::from_file((std::filesystem::path(model_dir) / "config.json").string());
   SafetensorsModel checkpoint(model_dir);
 
   if (config.model_type == "gpt2") {
     Gpt2Weights weights = map_gpt2_weights(checkpoint, config, arena);
-    return std::make_unique<Gpt2Model>(std::move(config), std::move(weights), arena, cublas);
+    return std::make_unique<Gpt2Model>(std::move(config), std::move(weights), arena, cublas,
+                                       max_tokens);
   }
   if (config.architecture == "LlamaForCausalLM" || config.architecture == "MistralForCausalLM" ||
       config.architecture == "Qwen2ForCausalLM") {

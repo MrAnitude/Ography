@@ -83,21 +83,32 @@ void gemm(cublasHandle_t handle, const Tensor& x, const Tensor& weight, Tensor& 
           cudaStream_t stream);
 
 struct SamplingKernelParams {
-  float temperature = 1.0f;  // 0 => greedy
+  float temperature = 1.0f;  // <= 0 => greedy
   int top_k = 0;             // 0 => disabled
-  float top_p = 1.0f;
-  float min_p = 0.0f;
+  float top_p = 1.0f;        // 1 => disabled
+  float min_p = 0.0f;        // 0 => disabled; keeps p >= min_p * p_max
   uint64_t seed = 0;
-  uint64_t step = 0;  // combined with seed for the RNG stream
+  uint64_t step = 0;  // Philox subsequence: one independent random draw per (seed, step)
 };
 
-// logits [vocab] -> one token id written to d_out_token. Penalties are applied beforehand.
+// logits [vocab] f32 -> one token id written to d_out_token. Filters apply in HF order:
+// temperature, top-k, top-p (over what top-k kept), min-p. Greedy (or top_k == 1) is an
+// argmax with ties going to the lowest id. scratch: f32, at least [vocab]. Penalties are
+// applied beforehand with apply_penalties. One block; no host sync.
 void sample(const Tensor& logits, const SamplingKernelParams& params, int32_t* d_out_token,
             Tensor& scratch, cudaStream_t stream);
 
-// Repetition / presence / frequency penalties applied in-place to logits.
-void apply_penalties(Tensor& logits, const Tensor& token_counts, float repetition,
-                     float presence, float frequency, cudaStream_t stream);
+// In-place on logits [vocab] f32, as in vLLM:
+//   repetition (HF-style, divides positive / multiplies negative logits) for tokens seen in
+//   the prompt (prompt_mask [vocab] i8 != 0) or the output (output_counts [vocab] i32 > 0);
+//   presence and frequency (OpenAI-style, subtracted) from output_counts only.
+void apply_penalties(Tensor& logits, const Tensor& prompt_mask, const Tensor& output_counts,
+                     float repetition, float presence, float frequency, cudaStream_t stream);
+
+// prompt_mask[ids[i]] = 1 for each prompt token (mask must be zeroed first).
+void mark_tokens(const Tensor& ids, Tensor& prompt_mask, cudaStream_t stream);
+// output_counts[*d_token] += 1, reading the token from device memory (graph-safe).
+void count_token(const int32_t* d_token, Tensor& output_counts, cudaStream_t stream);
 
 // Group-wise INT4 -> fp16 dequantization (AWQ/GPTQ-style). Baseline before a fused W4A16 GEMM.
 void dequant_int4(const Tensor& qweight, const Tensor& scales, const Tensor& zeros,

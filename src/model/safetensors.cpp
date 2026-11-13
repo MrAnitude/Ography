@@ -156,4 +156,11 @@ Tensor SafetensorsModel::get(const std::string& name) const {
   return files_[it->second]->get(name);
 }
 
+std::vector<std::string> SafetensorsModel::names() const {
+  std::vector<std::string> out;
+  out.reserve(name_to_file_.size());
+  for (const auto& [name, file] : name_to_file_) out.push_back(name);
+  return out;
+}
+
 }  // namespace ography

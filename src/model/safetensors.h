@@ -36,6 +36,7 @@ class SafetensorsModel {
 
   bool contains(const std::string& name) const;
   Tensor get(const std::string& name) const;  // throws if missing
+  std::vector<std::string> names() const;
 
  private:
   std::vector<std::unique_ptr<SafetensorsFile>> files_;
