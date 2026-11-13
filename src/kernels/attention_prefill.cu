@@ -23,10 +23,10 @@ namespace {
 
 constexpr int kWarps = 4;
 
-template <int kPerLane>  // head_dim / 32, rounded up
+template <int kPerLane, typename CacheT>  // head_dim / 32 rounded up; KV cache element type
 __global__ void attention_naive_kernel(const __half* __restrict__ q,
-                                       const __half* __restrict__ k_cache,
-                                       const __half* __restrict__ v_cache,
+                                       const CacheT* __restrict__ k_cache,
+                                       const CacheT* __restrict__ v_cache,
                                        const int32_t* __restrict__ positions,
                                        __half* __restrict__ out, int n_heads, int n_kv_heads,
                                        int head_dim, int max_seq, float scale) {
@@ -56,13 +56,13 @@ __global__ void attention_naive_kernel(const __half* __restrict__ q,
   float l = 0.0f;
   float acc[kPerLane] = {};
   for (int key = warp; key < n_keys; key += kWarps) {
-    const __half* k_row = k_cache + key * kv_row + static_cast<size_t>(kv_h) * head_dim;
-    const __half* v_row = v_cache + key * kv_row + static_cast<size_t>(kv_h) * head_dim;
+    const CacheT* k_row = k_cache + key * kv_row + static_cast<size_t>(kv_h) * head_dim;
+    const CacheT* v_row = v_cache + key * kv_row + static_cast<size_t>(kv_h) * head_dim;
     float s = 0.0f;
 #pragma unroll
     for (int p = 0; p < kPerLane; ++p) {
       const int d = lane + 32 * p;
-      if (d < head_dim) s += qv[p] * __half2float(k_row[d]);
+      if (d < head_dim) s += qv[p] * to_float(k_row[d]);
     }
     s = warp_sum(s);
 
@@ -73,7 +73,7 @@ __global__ void attention_naive_kernel(const __half* __restrict__ q,
 #pragma unroll
     for (int p = 0; p < kPerLane; ++p) {
       const int d = lane + 32 * p;
-      const float v = d < head_dim ? __half2float(v_row[d]) : 0.0f;
+      const float v = d < head_dim ? to_float(v_row[d]) : 0.0f;
       acc[p] = acc[p] * correction + w * v;
     }
     m = m_new;
@@ -113,8 +113,10 @@ void attention_naive(const Tensor& q, const Tensor& k_cache, const Tensor& v_cac
                      const Tensor& positions, float scale, Tensor& out, cudaStream_t stream,
                      const char* fn) {
   check_cuda(q, DType::F16, fn, "q");
-  check_cuda(k_cache, DType::F16, fn, "k_cache");
-  check_cuda(v_cache, DType::F16, fn, "v_cache");
+  check(k_cache.device() == Device::CUDA &&
+            (k_cache.dtype() == DType::F16 || k_cache.dtype() == DType::FP8_E4M3),
+        fn, "k_cache must be a CUDA f16 or fp8_e4m3 tensor");
+  check(v_cache.dtype() == k_cache.dtype(), fn, "k_cache and v_cache dtypes must match");
   check_cuda(out, DType::F16, fn, "out");
   check_cuda(positions, DType::I32, fn, "positions");
   check(q.ndim() == 3 && k_cache.ndim() == 3, fn, "q must be [T, heads, dim], cache [seq, kv_heads, dim]");
@@ -134,18 +136,26 @@ void attention_naive(const Tensor& q, const Tensor& k_cache, const Tensor& v_cac
   const dim3 grid(n_heads, T);
   const int threads = kWarps * 32;
   const size_t smem = (2 * kWarps + static_cast<size_t>(kWarps) * head_dim) * sizeof(float);
-  auto args = [&](auto kernel) {
-    kernel<<<grid, threads, smem, stream>>>(
-        q.data_as<const __half>(), k_cache.data_as<const __half>(),
-        v_cache.data_as<const __half>(), positions.data_as<const int32_t>(),
-        out.data_as<__half>(), n_heads, n_kv_heads, head_dim, max_seq, scale);
+  auto launch = [&](auto cache_tag) {
+    using C = decltype(cache_tag);
+    auto args = [&](auto kernel) {
+      kernel<<<grid, threads, smem, stream>>>(
+          q.data_as<const __half>(), k_cache.data_as<const C>(), v_cache.data_as<const C>(),
+          positions.data_as<const int32_t>(), out.data_as<__half>(), n_heads, n_kv_heads,
+          head_dim, max_seq, scale);
+    };
+    if (head_dim <= 64) {
+      args(attention_naive_kernel<2, C>);
+    } else if (head_dim <= 128) {
+      args(attention_naive_kernel<4, C>);
+    } else {
+      args(attention_naive_kernel<8, C>);
+    }
   };
-  if (head_dim <= 64) {
-    args(attention_naive_kernel<2>);
-  } else if (head_dim <= 128) {
-    args(attention_naive_kernel<4>);
+  if (k_cache.dtype() == DType::F16) {
+    launch(__half{});
   } else {
-    args(attention_naive_kernel<8>);
+    launch(__nv_fp8_e4m3{});
   }
   CUDA_CHECK_LAUNCH();
 }

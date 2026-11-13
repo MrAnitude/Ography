@@ -12,7 +12,7 @@ struct KVCacheConfig {
   int num_kv_heads = 0;
   int head_dim = 0;
   int max_seq_len = 0;          // sized at startup from free VRAM after weights load
-  DType dtype = DType::F16;     // FP8_E4M3 halves memory: worth it on 8 GB
+  DType dtype = DType::F16;     // or FP8_E4M3 (unscaled): half the memory, twice the context
 };
 
 // One contiguous [max_seq_len, num_kv_heads, head_dim] K and V buffer per layer.

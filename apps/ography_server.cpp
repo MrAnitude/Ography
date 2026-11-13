@@ -1,7 +1,7 @@
 // OpenAI-compatible inference server.
 //
 //   ography_server --model /path/to/hf-model [--host 127.0.0.1] [--port 8000]
-//                  [--max-seq-len N] [--prefill-chunk N] [--api-key KEY] [--no-cuda-graphs]
+//                  [--max-seq-len N] [--prefill-chunk N] [--api-key KEY] [--no-cuda-graphs] [--fp8-kv]
 //
 // Ctrl-C / SIGTERM stops the server; generations already queued finish first.
 
@@ -32,7 +32,8 @@ using namespace ography;
                "  --max-seq-len N      context length, default as large as fits\n"
                "  --prefill-chunk N    default 2048\n"
                "  --vram-fraction F    share of free VRAM to claim, default 0.92\n"
-               "  --no-cuda-graphs     decode without graph replay (debugging)\n",
+               "  --no-cuda-graphs     decode without graph replay (debugging)\n"
+               "  --fp8-kv             store the KV cache in FP8: twice the context\n",
                argv0);
   std::exit(code);
 }
@@ -58,6 +59,7 @@ int main(int argc, char** argv) {
     else if (a == "--prefill-chunk") engine_config.prefill_chunk = std::stoi(next());
     else if (a == "--vram-fraction") engine_config.vram_fraction = std::stof(next());
     else if (a == "--no-cuda-graphs") engine_config.use_cuda_graphs = false;
+    else if (a == "--fp8-kv") engine_config.fp8_kv_cache = true;
     else if (a == "-h" || a == "--help") usage(argv[0], 0);
     else {
       std::fprintf(stderr, "unknown option %s\n", a.c_str());

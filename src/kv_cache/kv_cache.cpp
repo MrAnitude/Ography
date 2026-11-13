@@ -10,8 +10,8 @@ KVCache::KVCache(const KVCacheConfig& config, DeviceArena& arena) : config_(conf
       config.max_seq_len <= 0) {
     throw std::invalid_argument("KVCache: all dimensions must be positive");
   }
-  if (config.dtype != DType::F16) {
-    throw std::invalid_argument("KVCache: only f16 is supported so far (fp8 is roadmap step 9)");
+  if (config.dtype != DType::F16 && config.dtype != DType::FP8_E4M3) {
+    throw std::invalid_argument("KVCache: dtype must be f16 or fp8_e4m3");
   }
   k_.reserve(config.num_layers);
   v_.reserve(config.num_layers);

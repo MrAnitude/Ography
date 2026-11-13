@@ -6,9 +6,10 @@ single-user inference** on a consumer laptop GPU. It loads Hugging Face checkpoi
 kernels, and serves the model through an **OpenAI-compatible HTTP API** so existing
 OpenAI clients and tools work against it unchanged.
 
-> **Status: early.** GPT-2 and the Llama family (Llama 3.x, Qwen2/2.5, Mistral) run end to
-> end, matching HF `transformers` layer by layer and token for token, with the tokenizer and
-> chat templates matching HF exactly. They are served through an OpenAI-compatible API
+> **Status: early.** GPT-2 and the Llama family (Llama 3.x, Qwen2/2.5, Mistral), in fp16 or
+> INT4 (AWQ / GPTQ), run end to end, matching HF `transformers` layer by layer and token for
+> token, with the tokenizer and chat templates matching HF exactly. A 7B INT4 model runs in
+> 8 GB. They are served through an OpenAI-compatible API
 > (`ography_server`) or a terminal chat (`ography_cli`), reusing the KV cache across chat
 > turns. See the [roadmap](#roadmap) for progress.
 
@@ -229,9 +230,13 @@ Download any Hugging Face checkpoint in safetensors format. Llama weights are ga
 the license on the model page and log in first (`huggingface-cli login`).
 
 ```sh
-tools/.venv/bin/huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct --local-dir models/qwen2.5-1.5b
+tools/.venv/bin/hf download Qwen/Qwen2.5-1.5B-Instruct --local-dir models/qwen2.5-1.5b
+tools/.venv/bin/hf download Qwen/Qwen2.5-7B-Instruct-AWQ --local-dir models/qwen2.5-7b-awq
 tools/.venv/bin/python tools/inspect_safetensors.py models/qwen2.5-1.5b
 ```
+
+Supported: GPT-2, and Llama / Mistral / Qwen2 checkpoints in fp16 / bf16 / fp32, or INT4
+AWQ ("gemm" packing) and GPTQ (without act-order). 4-bit 7–8B models fit in 8 GB.
 
 `models/` is git-ignored.
 
@@ -269,6 +274,7 @@ If CMake can't find `nvcc`, pass `-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
 | `--prefill-chunk N` | Longest prompt slice per forward pass (default 2048) |
 | `--vram-fraction F` | Share of free VRAM to claim (default 0.92) |
 | `--no-cuda-graphs` | Decode without graph replay (debugging) |
+| `--fp8-kv` | Store the KV cache in FP8: twice the context (not recommended for Qwen2) |
 | `--api-key KEY` | Require `Authorization: Bearer KEY` on `/v1/*` (or set `OGRAPHY_API_KEY`) |
 
 Endpoints: `POST /v1/chat/completions`, `POST /v1/completions` (both streaming and not),
@@ -363,7 +369,18 @@ The reference is HF in fp32 on the CPU. `LayerByLayer` compares the embeddings, 
 stream after every layer, the final norm and the logits, and stops at the first stage whose
 relative RMS error exceeds 1e-2 (fp16 lands around 1e-3). That stage points at the bug.
 `GreedyMatchesHF` teacher-forces HF's greedy continuation through decode steps and requires
-the same token at each step, except for near-ties.
+the same token at each step, except for near-ties. `Fp8KvCacheStaysClose` repeats that with
+an FP8 KV cache, with looser checks (skipped for models with q/k/v biases).
+
+For AWQ / GPTQ models, `dump_golden.py` dequantizes the checkpoint in plain torch and runs
+that as the fp32 reference. `--check-against <fp16 model dir>` also checks the dequantized
+model predicts like the original (Qwen2.5 1.5B: 99% next-token agreement for AWQ, 98% for
+GPTQ); a misread packing format would give near zero:
+
+```sh
+tools/.venv/bin/python tools/dump_golden.py --model models/qwen2.5-1.5b-awq \
+    --out golden/qwen2.5-1.5b-awq --check-against models/qwen2.5-1.5b
+```
 
 ## Benchmarking
 
@@ -393,12 +410,21 @@ At startup the engine makes **one** allocation and splits it up:
 
 KV cache size per token = `2 × layers × kv_heads × head_dim × bytes_per_element`.
 
-| Model (example) | Weights | KV / token (fp16) | Fits in 8 GB? |
-|---|---|---|---|
-| 1.5B, fp16 | ~3.1 GB | ~28 KB | Yes, with long context |
-| 3B, fp16 | ~6.4 GB | ~36 KB | Tight: short context |
-| 8B, INT4 (AWQ/GPTQ) | ~4.5–5 GB | 128 KB (64 KB with FP8 KV) | Yes, ~16–24K context |
-| 8B, fp16 | ~16 GB | n/a | No: needs quantization |
+Measured on the RTX 4070 Laptop (8 GB), default settings:
+
+| Model | Weights on GPU | KV / token | Context that fits | Decode |
+|---|---|---|---|---|
+| Llama 3.2 1B Instruct, fp16 | 2.5 GB | 32 KB | 131K (model max) | 93 tok/s |
+| Qwen2.5 1.5B Instruct, fp16 | 3.1 GB | 28 KB | 32K (model max) | 74 tok/s |
+| Qwen2.5 1.5B Instruct, AWQ / GPTQ INT4 | 1.3 GB | 28 KB | 32K (model max) | 155 tok/s |
+| Qwen2.5 7B Instruct, AWQ INT4 | 5.6 GB | 56 KB | ~22.8K | 48 tok/s |
+| 8B (Llama 3.1), AWQ INT4 | ~5.7 GB | 128 KB (64 KB with `--fp8-kv`) | ~9K (~18K) | |
+| 8B, fp16 | ~16 GB | | doesn't fit | |
+
+At batch 1 decode reads every weight once per token, so INT4 is also ~2x faster than fp16.
+`--fp8-kv` halves the KV cache, but costs accuracy on models with q/k/v biases (Qwen2): their
+K vectors have outlier channels that FP8's ~6% precision can't hold, so the engine warns. It
+is fine for Llama and GPT-2 (greedy output stays within near-ties of fp16).
 
 ## Roadmap
 
@@ -424,7 +450,11 @@ Progress is tracked here. The order matters: correctness before speed.
 - [x] **8. Latency:** prefix reuse across turns (a follow-up question on a 5.6K-token document:
   TTFT 2.7 s -> 34 ms), CUDA-graph decode (captured once at load; ~1% at 1-2B where launches
   already overlap), fused add+RMSNorm
-- [ ] **9. Memory:** FP8 KV cache, INT4 weight loading (AWQ/GPTQ), FP8 weights
+- [x] **9. Memory:** FP8 KV cache (`--fp8-kv`); INT4 AWQ and GPTQ checkpoints repacked at load
+  into one layout, with a fused W4A16 GEMV for decode and L2-sized dequant tiles + cuBLAS for
+  prefill. Qwen2.5 7B AWQ runs in 8 GB at 48 tok/s; the 1.5B AWQ/GPTQ models match their
+  dequantized HF reference layer by layer
+- [ ] **9b. Deferred:** FP8 weights (compressed-tensors), act-order GPTQ, calibrated FP8 KV scales
 - [ ] **10. Custom kernels:** FlashAttention-style prefill, split-K decode attention, W4A16 GEMV replacing cuBLAS for decode.
   Priority: the naive attention dominates at long context (Llama 3.2 1B at ~5.6K tokens:
   prefill ~2K tok/s, decode 93 -> 42 tok/s)

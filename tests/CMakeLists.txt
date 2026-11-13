@@ -19,7 +19,8 @@ add_executable(kernel_tests
   kernels/test_rmsnorm.cpp
   kernels/test_elementwise.cpp
   kernels/test_attention.cpp
-  kernels/test_sampling.cpp)
+  kernels/test_sampling.cpp
+  kernels/test_int4.cpp)
 target_link_libraries(kernel_tests PRIVATE ography_kernels GTest::gtest_main)
 gtest_discover_tests(kernel_tests DISCOVERY_MODE PRE_TEST)
 
@@ -43,9 +44,9 @@ target_link_libraries(golden_tests PRIVATE ography_engine GTest::gtest_main)
 target_compile_definitions(golden_tests PRIVATE OGRAPHY_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 gtest_discover_tests(golden_tests DISCOVERY_MODE PRE_TEST)
 # The same tests against the Llama-family references (skipped until dumped).
-foreach(model llama3.2-1b qwen2.5-1.5b)
+foreach(model llama3.2-1b qwen2.5-1.5b qwen2.5-1.5b-awq qwen2.5-1.5b-gptq)
   add_test(NAME golden_${model} COMMAND golden_tests)
   set_tests_properties(golden_${model} PROPERTIES
     ENVIRONMENT "OGRAPHY_GOLDEN_DIR=${PROJECT_SOURCE_DIR}/golden/${model}"
-    SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+    SKIP_REGULAR_EXPRESSION "NO GOLDEN DATA")
 endforeach()

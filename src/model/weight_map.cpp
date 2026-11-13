@@ -11,6 +11,7 @@
 
 #include "core/cuda_check.h"
 #include "core/logging.h"
+#include "kernels/kernels.h"
 
 namespace ography {
 
@@ -128,6 +129,69 @@ Tensor upload_concat(const std::vector<Tensor>& parts, DType dst_dtype, DeviceAr
   return dst;
 }
 
+namespace {
+
+// A CPU tensor copied to a temporary device allocation (freed on scope exit). Only used while
+// loading, so plain cudaMalloc is fine.
+struct TempDevice {
+  Tensor t;
+  explicit TempDevice(const Tensor& src) {
+    void* p = nullptr;
+    CUDA_CHECK(cudaMalloc(&p, src.nbytes()));
+    CUDA_CHECK(cudaMemcpy(p, src.data(), src.nbytes(), cudaMemcpyHostToDevice));
+    t = Tensor(p, src.dtype(), src.shape(), Device::CUDA);
+  }
+  ~TempDevice() { cudaFree(t.data()); }
+  TempDevice(const TempDevice&) = delete;
+  TempDevice& operator=(const TempDevice&) = delete;
+};
+
+// Loads checkpoint linears (each "<prefix>.qweight/.qzeros/.scales", [in, out_i]) fused along
+// out into one engine-layout INT4 weight.
+QuantizedWeight load_int4(const SafetensorsModel& ckpt, const QuantConfig& q,
+                          const std::vector<std::pair<std::string, int64_t>>& parts, int64_t in,
+                          DeviceArena& arena) {
+  int64_t total_out = 0;
+  for (const auto& [name, out] : parts) total_out += out;
+  const int64_t groups = in / q.group_size;
+  QuantizedWeight w;
+  w.method = q.method;
+  w.group_size = q.group_size;
+  w.weight = arena.allocate(DType::I32, {total_out, in / 8});
+  w.scales = arena.allocate(DType::F16, {total_out, groups});
+  w.zeros = arena.allocate(DType::F16, {total_out, groups});
+  const auto source =
+      q.method == QuantMethod::AWQ ? kernels::Int4Source::AWQ : kernels::Int4Source::GPTQ;
+
+  int64_t row = 0;
+  for (const auto& [name, out] : parts) {
+    const Tensor qweight = ckpt.get(name + ".qweight");
+    const Tensor qzeros = ckpt.get(name + ".qzeros");
+    const Tensor scales = ckpt.get(name + ".scales");
+    if (source == kernels::Int4Source::AWQ) expect_shape(qweight, {in, out / 8}, name + ".qweight");
+    else expect_shape(qweight, {in / 8, out}, name + ".qweight");
+    expect_shape(qzeros, {groups, out / 8}, name + ".qzeros");
+    expect_shape(scales, {groups, out}, name + ".scales");
+    if (scales.dtype() != DType::F16) throw std::runtime_error(name + ".scales must be f16");
+    if (q.method == QuantMethod::GPTQ && ckpt.contains(name + ".g_idx")) {
+      // Act-order is rejected by QuantConfig, but check the permutation really is trivial.
+      const Tensor g_idx = ckpt.get(name + ".g_idx");
+      const int32_t* g = g_idx.data_as<const int32_t>();
+      for (int64_t i = 0; i < g_idx.numel(); ++i) {
+        if (g[i] != i / q.group_size) throw std::runtime_error(name + ": g_idx is not sequential");
+      }
+    }
+    TempDevice d_qweight(qweight), d_qzeros(qzeros), d_scales(scales);
+    kernels::repack_int4(source, d_qweight.t, d_qzeros.t, d_scales.t, q.group_size, w.weight,
+                         w.scales, w.zeros, static_cast<int>(row), nullptr);
+    CUDA_CHECK(cudaDeviceSynchronize());  // before the temporaries are freed
+    row += out;
+  }
+  return w;
+}
+
+}  // namespace
+
 LlamaWeights map_llama_weights(const SafetensorsModel& checkpoint, const ModelConfig& config,
                                DeviceArena& arena, DType compute_dtype) {
   const int64_t H = config.hidden_size;
@@ -148,6 +212,16 @@ LlamaWeights map_llama_weights(const SafetensorsModel& checkpoint, const ModelCo
     w.weight = upload_tensor(get(name, {out, in}), compute_dtype, false, arena);
     return w;
   };
+  const bool int4 = config.quant.method == QuantMethod::AWQ || config.quant.method == QuantMethod::GPTQ;
+  // A decoder linear: names are module prefixes ("...q_proj"), fused along out when several.
+  auto proj = [&](const std::vector<std::pair<std::string, int64_t>>& parts, int64_t in) {
+    if (int4) return load_int4(checkpoint, config.quant, parts, in, arena);
+    std::vector<Tensor> tensors;
+    for (const auto& [name, out] : parts) tensors.push_back(get(name + ".weight", {out, in}));
+    QuantizedWeight w;
+    w.weight = upload_concat(tensors, compute_dtype, arena);
+    return w;
+  };
 
   LlamaWeights w;
   w.embed_tokens = upload_tensor(get("model.embed_tokens.weight", {config.vocab_size, H}),
@@ -157,22 +231,20 @@ LlamaWeights map_llama_weights(const SafetensorsModel& checkpoint, const ModelCo
     const std::string p = "model.layers." + std::to_string(i) + ".";
     LlamaLayerWeights& L = w.layers[i];
     L.attn_norm = vec(p + "input_layernorm.weight", H);
-    L.wqkv.weight = upload_concat({get(p + "self_attn.q_proj.weight", {q_out, H}),
-                                   get(p + "self_attn.k_proj.weight", {kv_out, H}),
-                                   get(p + "self_attn.v_proj.weight", {kv_out, H})},
-                                  compute_dtype, arena);
+    L.wqkv = proj({{p + "self_attn.q_proj", q_out},
+                   {p + "self_attn.k_proj", kv_out},
+                   {p + "self_attn.v_proj", kv_out}},
+                  H);
     if (config.attention_bias) {
       L.bqkv = upload_concat({get(p + "self_attn.q_proj.bias", {q_out}),
                               get(p + "self_attn.k_proj.bias", {kv_out}),
                               get(p + "self_attn.v_proj.bias", {kv_out})},
                              compute_dtype, arena);
     }
-    L.wo = linear(p + "self_attn.o_proj.weight", H, q_out);
+    L.wo = proj({{p + "self_attn.o_proj", H}}, q_out);
     L.ffn_norm = vec(p + "post_attention_layernorm.weight", H);
-    L.w_gate_up.weight = upload_concat({get(p + "mlp.gate_proj.weight", {I, H}),
-                                        get(p + "mlp.up_proj.weight", {I, H})},
-                                       compute_dtype, arena);
-    L.w_down = linear(p + "mlp.down_proj.weight", H, I);
+    L.w_gate_up = proj({{p + "mlp.gate_proj", I}, {p + "mlp.up_proj", I}}, H);
+    L.w_down = proj({{p + "mlp.down_proj", H}}, I);
   }
   w.final_norm = vec("model.norm.weight", H);
 

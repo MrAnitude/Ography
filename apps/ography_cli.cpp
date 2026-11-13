@@ -53,6 +53,7 @@ struct Options {
                "  --max-seq-len N         context length, default as large as fits\n"
                "  --prefill-chunk N       default 2048\n"
                "  --no-cuda-graphs        decode without graph replay (debugging)\n"
+               "  --fp8-kv                store the KV cache in FP8: twice the context\n"
                "In chat: /reset clears the conversation, /quit exits.\n",
                argv0);
   std::exit(code);
@@ -82,6 +83,7 @@ Options parse(int argc, char** argv) {
     else if (a == "--max-seq-len") o.engine.max_seq_len = std::stoi(next());
     else if (a == "--prefill-chunk") o.engine.prefill_chunk = std::stoi(next());
     else if (a == "--no-cuda-graphs") o.engine.use_cuda_graphs = false;
+    else if (a == "--fp8-kv") o.engine.fp8_kv_cache = true;
     else if (a == "-h" || a == "--help") usage(argv[0], 0);
     else {
       std::fprintf(stderr, "unknown option %s\n", a.c_str());

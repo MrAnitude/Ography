@@ -49,6 +49,7 @@ class LlamaModel final : public Model {
   Tensor proj_;      // [T, H] f16, output of o_proj / down_proj
   Tensor gate_up_;   // [T, 2I] f16
   Tensor act_;       // [T, I] f16
+  Tensor dequant_;   // f16 scratch for INT4 prefill tiles (empty for fp16 weights)
 };
 
 }  // namespace ography

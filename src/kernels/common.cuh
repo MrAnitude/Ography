@@ -3,6 +3,7 @@
 // Device-side helpers shared by the kernel .cu files. Not part of the public kernels.h API.
 
 #include <cuda_fp16.h>
+#include <cuda_fp8.h>
 
 #include <stdexcept>
 #include <string>
@@ -20,6 +21,13 @@ template <>
 __device__ __forceinline__ float from_float<float>(float v) { return v; }
 template <>
 __device__ __forceinline__ __half from_float<__half>(float v) { return __float2half(v); }
+
+// KV cache element type: fp16, or fp8 E4M3 (no scale; saturates at +-448).
+__device__ __forceinline__ float to_float(__nv_fp8_e4m3 v) { return static_cast<float>(v); }
+template <>
+__device__ __forceinline__ __nv_fp8_e4m3 from_float<__nv_fp8_e4m3>(float v) {
+  return __nv_fp8_e4m3(v);  // round to nearest, saturating to the finite range
+}
 
 __device__ __forceinline__ float warp_sum(float v) {
 #pragma unroll

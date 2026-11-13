@@ -51,6 +51,7 @@ ography_module(model
   model/weight_map.cpp
   model/registry.cpp
   model/rope.cpp
+  model/linear.cpp
   model/arch/llama.cpp
   model/arch/gpt2.cpp)
 target_link_libraries(ography_model PUBLIC

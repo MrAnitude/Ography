@@ -6,6 +6,7 @@
 
 #include "core/cuda_check.h"
 #include "kernels/kernels.h"
+#include "model/linear.h"
 #include "model/rope.h"
 
 namespace ography {
@@ -37,6 +38,12 @@ LlamaModel::LlamaModel(ModelConfig config, LlamaWeights weights, DeviceArena& sc
   proj_ = scratch_arena.allocate(DType::F16, {T, H});
   gate_up_ = scratch_arena.allocate(DType::F16, {T, 2 * I});
   act_ = scratch_arena.allocate(DType::F16, {T, I});
+  if (config_.quant.method != QuantMethod::None) {
+    // INT4 prefill dequantizes weight rows into this in tiles, each then multiplied by cuBLAS.
+    // 8 MiB stays in the 32 MB L2, so the fp16 tile never goes to DRAM: measured on
+    // Qwen2.5 7B AWQ, a 30-token prefill takes 69 ms with 8 MiB tiles vs 130 ms with 64 MiB.
+    dequant_ = scratch_arena.allocate(DType::F16, {int64_t{4} << 20});
+  }
 }
 
 void LlamaModel::forward(const ForwardInput& input, KVCache& kv_cache, Tensor& logits,
@@ -75,7 +82,7 @@ void LlamaModel::forward(const ForwardInput& input, KVCache& kv_cache, Tensor& l
   for (int i = 0; i < n_layers; ++i) {
     const LlamaLayerWeights& L = weights_.layers[i];
 
-    kernels::gemm(cublas_, x, L.wqkv.weight, qkv, stream);
+    linear(cublas_, x, L.wqkv, qkv, dequant_, stream);
     kernels::split_qkv(qkv, L.bqkv, config_.num_heads, config_.num_kv_heads, q, kv_cache.k(i),
                        kv_cache.v(i), pos, inv_freq_, stream);
     if (input.is_decode) {
@@ -83,12 +90,12 @@ void LlamaModel::forward(const ForwardInput& input, KVCache& kv_cache, Tensor& l
     } else {
       kernels::attention_prefill(q, kv_cache.k(i), kv_cache.v(i), pos, scale, attn, stream);
     }
-    kernels::gemm(cublas_, attn_2d, L.wo.weight, proj, stream);
+    linear(cublas_, attn_2d, L.wo, proj, dequant_, stream);
     kernels::add_rmsnorm(proj, residual, L.ffn_norm, eps, x, stream);
 
-    kernels::gemm(cublas_, x, L.w_gate_up.weight, gate_up, stream);
+    linear(cublas_, x, L.w_gate_up, gate_up, dequant_, stream);
     kernels::swiglu(gate_up, act, stream);
-    kernels::gemm(cublas_, act, L.w_down.weight, proj, stream);
+    linear(cublas_, act, L.w_down, proj, dequant_, stream);
 
     const Tensor& next_norm = i + 1 == n_layers ? weights_.final_norm : weights_.layers[i + 1].attn_norm;
     kernels::add_rmsnorm(proj, residual, next_norm, eps, x, stream);

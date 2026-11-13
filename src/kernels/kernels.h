@@ -119,8 +119,35 @@ void mark_tokens(const Tensor& ids, Tensor& prompt_mask, cudaStream_t stream);
 // output_counts[*d_token] += 1, reading the token from device memory (graph-safe).
 void count_token(const int32_t* d_token, Tensor& output_counts, cudaStream_t stream);
 
-// Group-wise INT4 -> fp16 dequantization (AWQ/GPTQ-style). Baseline before a fused W4A16 GEMM.
+// ---- INT4 weights (W4A16) ----
+// The engine's INT4 layout for a linear weight W [out, in], group-wise asymmetric:
+//   qweight [out, in/8] i32: word (o, b) holds q for inputs 8b..8b+7, input 8b+k in bits 4k..4k+3
+//   scales  [out, in/group] f16, zeros [out, in/group] f16 (small integers)
+//   W[o, i] = (q[o, i] - zeros[o, i/group]) * scales[o, i/group]
+// Requires in % 32 == 0 and group % 32 == 0. AWQ and GPTQ checkpoints are converted into it
+// at load time by repack_int4.
+
+enum class Int4Source {
+  AWQ,   // qweight [in, out/8], qzeros [groups, out/8], nibbles in AWQ's [0,2,4,6,1,3,5,7] order
+  GPTQ,  // qweight [in/8, out], qzeros [groups, out/8] storing zero - 1; sequential (no act order)
+};
+
+// Converts one checkpoint linear (device copies of qweight / qzeros / scales [groups, out])
+// into rows [row_offset, row_offset + out) of the engine layout, so fused projections can be
+// assembled part by part.
+void repack_int4(Int4Source source, const Tensor& qweight, const Tensor& qzeros,
+                 const Tensor& scales, int group_size, Tensor& out_qweight, Tensor& out_scales,
+                 Tensor& out_zeros, int row_offset, cudaStream_t stream);
+
+// Dequantizes rows [row_begin, row_begin + out.dim(0)) to fp16 out [rows, in].
 void dequant_int4(const Tensor& qweight, const Tensor& scales, const Tensor& zeros,
-                  int group_size, Tensor& out, cudaStream_t stream);
+                  int group_size, int row_begin, Tensor& out, cudaStream_t stream);
+
+// out [T, out] f16 = x [T, in] f16 @ W^T for an INT4 weight. T == 1 runs a fused GEMV that
+// reads the packed weights directly (decode: 4x less memory traffic than fp16); larger T
+// dequantizes tiles of rows into scratch (f16, any size >= one row) and uses cuBLAS.
+void gemm_w4a16(cublasHandle_t handle, const Tensor& x, const Tensor& qweight,
+                const Tensor& scales, const Tensor& zeros, int group_size, Tensor& out,
+                Tensor& scratch, cudaStream_t stream);
 
 }  // namespace ography::kernels

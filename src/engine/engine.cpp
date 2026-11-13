@@ -46,12 +46,20 @@ double ms_between(Clock::time_point a, Clock::time_point b) {
 
 std::string mib(size_t bytes) { return std::to_string(bytes / kMiB) + " MiB"; }
 
-// Weights are stored fp16 on the GPU whatever the checkpoint dtype.
-// TODO: account for quantized weights (roadmap step 9).
-size_t estimate_weight_bytes(const std::string& model_dir) {
+// Float weights are stored fp16 on the GPU whatever the checkpoint dtype; packed INT4 weights
+// keep their size, and their zero points grow from 4 to 16 bits.
+size_t estimate_weight_bytes(const std::string& model_dir, const ModelConfig& config) {
   SafetensorsModel ckpt(model_dir);
   size_t bytes = 0;
-  for (const auto& name : ckpt.names()) bytes += ckpt.get(name).numel() * 2;
+  for (const auto& name : ckpt.names()) {
+    // Some tied checkpoints still ship lm_head.weight; the engine uses the embeddings.
+    if (config.tie_word_embeddings && name == "lm_head.weight") continue;
+    const Tensor t = ckpt.get(name);
+    const bool is_float = t.dtype() == DType::F32 || t.dtype() == DType::F16 || t.dtype() == DType::BF16;
+    if (name.size() >= 6 && name.compare(name.size() - 6, 6, ".g_idx") == 0) continue;  // not kept
+    const bool qzeros = name.size() >= 7 && name.compare(name.size() - 7, 7, ".qzeros") == 0;
+    bytes += is_float ? t.numel() * 2 : qzeros ? t.nbytes() * 4 : t.nbytes();
+  }
   return bytes;
 }
 
@@ -59,7 +67,9 @@ size_t estimate_weight_bytes(const std::string& model_dir) {
 // own per-vocab buffers.
 size_t estimate_scratch_bytes(const ModelConfig& c, int tokens) {
   const size_t per_token = 16 * size_t(c.hidden_size) + 4 * size_t(c.intermediate_size);
-  return size_t(tokens) * per_token + 16 * size_t(c.vocab_size) + 16 * kMiB + kCublasWorkspace;
+  const size_t dequant = c.quant.method != QuantMethod::None ? 8 * kMiB : 0;  // see LlamaModel
+  return size_t(tokens) * per_token + 16 * size_t(c.vocab_size) + 16 * kMiB + kCublasWorkspace +
+         dequant;
 }
 
 }  // namespace
@@ -135,9 +145,15 @@ Engine::Engine(const EngineConfig& config) : impl_(std::make_unique<Impl>()) {
   int want_ctx = mc.max_position_embeddings;
   if (config.max_seq_len > 0) want_ctx = std::min(want_ctx, config.max_seq_len);
   m.chunk = std::max(1, std::min(config.prefill_chunk, want_ctx));
-  KVCacheConfig kvc{mc.num_layers, mc.num_kv_heads, mc.head_dim, 0};
+  KVCacheConfig kvc{mc.num_layers, mc.num_kv_heads, mc.head_dim, 0,
+                    config.fp8_kv_cache ? DType::FP8_E4M3 : DType::F16};
   const size_t kv_per_token = KVCache::bytes_per_token(kvc);
-  const size_t fixed = estimate_weight_bytes(config.model_dir) +
+  if (config.fp8_kv_cache && mc.attention_bias && mc.model_type != "gpt2") {
+    log(LogLevel::Warn,
+        "--fp8-kv loses noticeable accuracy on models with q/k/v biases (Qwen2): their K "
+        "values have large outlier channels that E4M3 can't represent precisely");
+  }
+  const size_t fixed = estimate_weight_bytes(config.model_dir, mc) +
                        estimate_scratch_bytes(mc, m.chunk) + 64 * kMiB;
   const size_t budget = static_cast<size_t>(config.vram_fraction * query_free_device_memory());
   const size_t min_ctx = std::min(want_ctx, 256);
@@ -202,11 +218,12 @@ Engine::Engine(const EngineConfig& config) : impl_(std::make_unique<Impl>()) {
   char msg[256];
   std::snprintf(msg, sizeof msg,
                 "loaded %s (%s) in %.0f ms (warm-up %.0f ms%s): arena %s, weights+scratch %s, "
-                "KV cache %d tokens (%s)",
+                "KV cache %d tokens (%s, %s)",
                 m.name.c_str(), mc.architecture.c_str(), ms_between(t0, Clock::now()), warm_ms,
                 config.use_cuda_graphs ? ", decode graph captured" : "",
                 mib(m.arena->capacity()).c_str(), mib(weights_and_scratch).c_str(),
-                kvc.max_seq_len, mib(kvc.max_seq_len * kv_per_token).c_str());
+                kvc.max_seq_len, mib(kvc.max_seq_len * kv_per_token).c_str(),
+                std::string(dtype_name(kvc.dtype)).c_str());
   log(LogLevel::Info, msg);
 }
 
