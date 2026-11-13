@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <cuda_runtime.h>
 
 #include "core/tensor.h"
@@ -30,6 +32,23 @@ class Model {
                        cudaStream_t stream) = 0;
 
   virtual const ModelConfig& config() const = 0;
+
+  // Debug hook for golden tests. During forward, called with the [n_tokens, hidden] device
+  // tensor at each stage: 0 = embeddings, 1..num_layers = residual stream after each decoder
+  // layer, num_layers + 1 = final norm output. Must be unset while capturing a CUDA graph.
+  using HiddenStateObserver =
+      std::function<void(int stage, const Tensor& hidden, cudaStream_t stream)>;
+  void set_hidden_state_observer(HiddenStateObserver observer) {
+    observer_ = std::move(observer);
+  }
+
+ protected:
+  void observe(int stage, const Tensor& hidden, cudaStream_t stream) const {
+    if (observer_) observer_(stage, hidden, stream);
+  }
+
+ private:
+  HiddenStateObserver observer_;
 };
 
 }  // namespace ography

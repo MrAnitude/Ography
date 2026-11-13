@@ -66,6 +66,7 @@ void Gpt2Model::forward(const ForwardInput& input, KVCache& kv_cache, Tensor& lo
   Tensor attn_2d(attn.data(), DType::F16, {T, config_.hidden_size}, Device::CUDA);
 
   kernels::embedding_with_positions(weights_.wte, weights_.wpe, ids, pos, residual, stream);
+  observe(0, residual, stream);
   kernels::layernorm(residual, weights_.layers[0].ln_1_weight, weights_.layers[0].ln_1_bias, eps,
                      x, stream);
 
@@ -92,7 +93,9 @@ void Gpt2Model::forward(const ForwardInput& input, KVCache& kv_cache, Tensor& lo
     const Tensor& next_w = last ? weights_.ln_f_weight : weights_.layers[i + 1].ln_1_weight;
     const Tensor& next_b = last ? weights_.ln_f_bias : weights_.layers[i + 1].ln_1_bias;
     kernels::add_layernorm(proj, L.b_proj, residual, next_w, next_b, eps, x, stream);
+    observe(i + 1, residual, stream);
   }
+  observe(n_layers + 1, x, stream);
 
   // x now holds ln_f(residual). Only the last token's logits are needed.
   Tensor last = x.slice_rows(T - 1, 1);

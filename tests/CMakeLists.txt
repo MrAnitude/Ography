@@ -31,7 +31,9 @@ target_compile_definitions(model_tests PRIVATE OGRAPHY_SOURCE_DIR="${PROJECT_SOU
 gtest_discover_tests(model_tests DISCOVERY_MODE PRE_TEST)
 
 # Golden tests: compare layer outputs / logits with reference tensors dumped from
-# HF transformers by tools/dump_golden.py. Skipped when OGRAPHY_GOLDEN_DIR is unset.
+# HF transformers by tools/dump_golden.py. Uses $OGRAPHY_GOLDEN_DIR, else golden/gpt2;
+# skipped if neither exists.
 add_executable(golden_tests golden/test_golden.cpp)
 target_link_libraries(golden_tests PRIVATE ography_engine GTest::gtest_main)
+target_compile_definitions(golden_tests PRIVATE OGRAPHY_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 gtest_discover_tests(golden_tests DISCOVERY_MODE PRE_TEST)

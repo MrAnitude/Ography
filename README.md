@@ -6,9 +6,10 @@ single-user inference** on a consumer laptop GPU. It loads Hugging Face checkpoi
 kernels, and serves the model through an **OpenAI-compatible HTTP API** so existing
 OpenAI clients and tools work against it unchanged.
 
-> **Status: scaffold.** The module layout, build system, interfaces and test harness are in
-> place. Most function bodies are `OGRAPHY_TODO(...)` stubs that abort with their file and
-> line if called. See the [roadmap](#roadmap) for build order and progress.
+> **Status: early.** GPT-2 runs end to end on the GPU (prefill + decode with a KV cache) and
+> matches HF `transformers` layer by layer. The tokenizer, generation loop, server and Llama
+> are still `OGRAPHY_TODO(...)` stubs that abort with their file and line if called. See the
+> [roadmap](#roadmap) for build order and progress.
 
 ---
 
@@ -317,11 +318,19 @@ Golden tests catch the subtle bugs that make a model produce fluent nonsense: wr
 convention, wrong norm epsilon, Q/K/V fused in the wrong order, or a transposed weight.
 
 ```sh
+tools/.venv/bin/python tools/dump_golden.py --model models/gpt2 --out golden/gpt2
+./build/tests/golden_tests                    # uses golden/gpt2 by default
+
+# any other model:
 tools/.venv/bin/python tools/dump_golden.py --model models/qwen2.5-1.5b --out golden/qwen2.5-1.5b
 OGRAPHY_GOLDEN_DIR=golden/qwen2.5-1.5b ./build/tests/golden_tests
 ```
 
-The first layer whose hidden state diverges from the reference points at the bug.
+The reference is HF in fp32 on the CPU. `LayerByLayer` compares the embeddings, the residual
+stream after every layer, the final norm and the logits, and stops at the first stage whose
+relative RMS error exceeds 1e-2 (fp16 lands around 1e-3). That stage points at the bug.
+`GreedyMatchesHF` teacher-forces HF's greedy continuation through decode steps and requires
+the same token at each step, except for near-ties.
 
 ## Benchmarking
 
@@ -369,7 +378,7 @@ Progress is tracked here. The order matters: correctness before speed.
 - [x] **3. Forward pass (GPT-2):** `Gpt2Model::forward` with KV cache, prefill + decode, checked
   against a CPU fp32 reference
 - [ ] **3b. Llama:** RMSNorm, RoPE, SwiGLU kernels, `map_llama_weights`, `LlamaModel::forward`
-- [ ] **4. Golden tests:** `dump_golden.py`, then layer-by-layer agreement with HF
+- [x] **4. Golden tests (GPT-2):** `dump_golden.py`, layer-by-layer agreement with HF, teacher-forced greedy
 - [ ] **5. Tokenizer:** byte-level BPE, special tokens, chat templates, incremental decoding
 - [ ] **6. Generation:** sampling kernels, stop handling, `Engine::generate`, `ography_cli`
 - [ ] **7. Server:** OpenAI endpoints, SSE streaming, cancellation on disconnect
