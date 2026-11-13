@@ -76,7 +76,7 @@ void Gpt2Model::forward(const ForwardInput& input, KVCache& kv_cache, Tensor& lo
 
     kernels::gemm(cublas_, x, L.wqkv.weight, qkv, stream);
     kernels::split_qkv(qkv, L.bqkv, config_.num_heads, config_.num_kv_heads, q, kv_cache.k(i),
-                       kv_cache.v(i), pos, stream);
+                       kv_cache.v(i), pos, /*inv_freq=*/Tensor(), stream);
     if (input.is_decode) {
       kernels::attention_decode(q, kv_cache.k(i), kv_cache.v(i), pos, scale, attn, stream);
     } else {

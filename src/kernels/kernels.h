@@ -40,28 +40,27 @@ void add_layernorm(const Tensor& x, const Tensor& x_bias, Tensor& residual, cons
 // In place: x = gelu_tanh(x + bias). GPT-2's "gelu_new". x [T, I] fp16; bias [I] fp16.
 void bias_gelu(Tensor& x, const Tensor& bias, cudaStream_t stream);
 
-// out = x / rms(x) * weight
+// RMSNorm over the last dim: out = x / sqrt(mean(x^2) + eps) * weight (fp32 statistics).
+// x [T, H] fp32 or fp16; weight [H] fp16; out [T, H] fp16.
 void rmsnorm(const Tensor& x, const Tensor& weight, float eps, Tensor& out, cudaStream_t stream);
 
-// Fused: residual += x; x = rmsnorm(residual) * weight. One pass over memory instead of two.
-void add_rmsnorm(Tensor& x, Tensor& residual, const Tensor& weight, float eps,
+// Fused residual update + RMSNorm, one pass:  residual += x;  out = rmsnorm(residual)
+// x [T, H] fp16; residual [T, H] fp32; out [T, H] fp16 (may alias x).
+void add_rmsnorm(const Tensor& x, Tensor& residual, const Tensor& weight, float eps, Tensor& out,
                  cudaStream_t stream);
 
-// In-place rotary embedding on q [T, n_heads, head_dim] and k [T, n_kv_heads, head_dim].
-// TODO: rope_scaling variants (llama3, yarn) via precomputed inv_freq table.
-void rope(Tensor& q, Tensor& k, const Tensor& positions, const Tensor& inv_freq,
-          cudaStream_t stream);
-
-// gate_up [T, 2*I] (gate and up projections fused) -> out [T, I] = silu(gate) * up
+// gate_up [T, 2*I] (gate and up projections fused) -> out [T, I] = silu(gate) * up. fp16.
 void swiglu(const Tensor& gate_up, Tensor& out, cudaStream_t stream);
 
 // Splits a fused projection qkv [T, (n_heads + 2*n_kv_heads) * head_dim] into q and the KV
-// cache, adding the optional fused bias. q: [T, n_heads, head_dim] fp16;
-// k_cache/v_cache: [max_seq, n_kv_heads, head_dim] fp16; row t is written at positions[t].
-// TODO(llama): apply rope to q/k here, before K lands in the cache.
+// cache, adding the optional fused bias and applying rotary embeddings to q and k when
+// inv_freq is given, so K lands in the cache already rotated.
+// q: [T, n_heads, head_dim] fp16; k_cache/v_cache: [max_seq, n_kv_heads, head_dim] fp16;
+// row t is written at positions[t]. inv_freq: [head_dim / 2] fp32 (rope scaling already
+// applied), or empty for no rope. RoPE uses HF's rotate_half convention (pairs i, i + d/2).
 void split_qkv(const Tensor& qkv, const Tensor& qkv_bias, int n_heads, int n_kv_heads,
                Tensor& q, Tensor& k_cache, Tensor& v_cache, const Tensor& positions,
-               cudaStream_t stream);
+               const Tensor& inv_freq, cudaStream_t stream);
 
 // Causal attention over the KV cache. Query t attends to cached positions [0, positions[t]],
 // so this covers a prefill chunk at any offset and single-token decode alike, and reads

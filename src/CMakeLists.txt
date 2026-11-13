@@ -28,7 +28,6 @@ ography_module(kernels
   kernels/layernorm.cu
   kernels/gelu.cu
   kernels/qkv.cu
-  kernels/rope.cu
   kernels/swiglu.cu
   kernels/attention_prefill.cu
   kernels/attention_decode.cu
@@ -51,6 +50,7 @@ ography_module(model
   model/safetensors.cpp
   model/weight_map.cpp
   model/registry.cpp
+  model/rope.cpp
   model/arch/llama.cpp
   model/arch/gpt2.cpp)
 target_link_libraries(ography_model PUBLIC

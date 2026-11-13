@@ -8,7 +8,8 @@ add_executable(unit_tests
   unit/test_config.cpp
   unit/test_tokenizer.cpp
   unit/test_stop_checker.cpp
-  unit/test_openai_api.cpp)
+  unit/test_openai_api.cpp
+  unit/test_rope.cpp)
 target_link_libraries(unit_tests PRIVATE ography_http GTest::gtest_main)
 target_compile_definitions(unit_tests PRIVATE OGRAPHY_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 gtest_discover_tests(unit_tests DISCOVERY_MODE PRE_TEST)
@@ -40,3 +41,10 @@ add_executable(golden_tests golden/test_golden.cpp)
 target_link_libraries(golden_tests PRIVATE ography_engine GTest::gtest_main)
 target_compile_definitions(golden_tests PRIVATE OGRAPHY_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 gtest_discover_tests(golden_tests DISCOVERY_MODE PRE_TEST)
+# The same tests against the Llama-family references (skipped until dumped).
+foreach(model llama3.2-1b qwen2.5-1.5b)
+  add_test(NAME golden_${model} COMMAND golden_tests)
+  set_tests_properties(golden_${model} PROPERTIES
+    ENVIRONMENT "OGRAPHY_GOLDEN_DIR=${PROJECT_SOURCE_DIR}/golden/${model}"
+    SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+endforeach()

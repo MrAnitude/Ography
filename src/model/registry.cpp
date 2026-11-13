@@ -24,7 +24,9 @@ std::unique_ptr<Model> load_model(const std::string& model_dir, DeviceArena& are
   }
   if (config.architecture == "LlamaForCausalLM" || config.architecture == "MistralForCausalLM" ||
       config.architecture == "Qwen2ForCausalLM") {
-    OGRAPHY_TODO("load_model: Llama family (map_llama_weights + LlamaModel)");
+    LlamaWeights weights = map_llama_weights(checkpoint, config, arena);
+    return std::make_unique<LlamaModel>(std::move(config), std::move(weights), arena, cublas,
+                                        max_tokens);
   }
   throw std::runtime_error(model_dir + ": unsupported architecture \"" + config.architecture +
                            "\" (model_type \"" + config.model_type + "\")");

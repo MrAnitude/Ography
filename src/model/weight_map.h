@@ -34,12 +34,11 @@ struct LlamaWeights {
   QuantizedWeight lm_head;  // aliases embed_tokens when tie_word_embeddings
 };
 
-// HF tensor names -> LlamaWeights. The name scheme differs slightly per family
-// (e.g. "model.layers.{i}.self_attn.q_proj.weight" for Llama).
-// Reads from the mmapped checkpoint, fuses projections, converts dtype if needed,
-// and uploads into the arena.
+// HF tensor names ("model.layers.{i}.self_attn.q_proj.weight", ...) -> LlamaWeights, for
+// Llama, Mistral and Qwen2 checkpoints. Reads from the mmapped checkpoint, fuses projections,
+// converts dtype, and uploads into the arena.
 LlamaWeights map_llama_weights(const SafetensorsModel& checkpoint, const ModelConfig& config,
-                               DeviceArena& arena);
+                               DeviceArena& arena, DType compute_dtype = DType::F16);
 
 // ---- GPT-2 ----
 // HF stores GPT-2 linears as Conv1D, i.e. [in, out]; they are transposed to [out, in] here.
@@ -73,5 +72,9 @@ Gpt2Weights map_gpt2_weights(const SafetensorsModel& checkpoint, const ModelConf
 // Copies a CPU tensor (F32/F16/BF16) to a new arena tensor of dst_dtype, optionally
 // transposing a 2-d tensor. Exposed for tests and other architectures' loaders.
 Tensor upload_tensor(const Tensor& src, DType dst_dtype, bool transpose, DeviceArena& arena);
+
+// Concatenates CPU tensors along dim 0 (trailing dims must match) into one new arena tensor
+// of dst_dtype. Used to fuse q/k/v and gate/up projections.
+Tensor upload_concat(const std::vector<Tensor>& parts, DType dst_dtype, DeviceArena& arena);
 
 }  // namespace ography

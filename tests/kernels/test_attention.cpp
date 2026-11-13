@@ -81,7 +81,8 @@ TEST_P(AttentionTest, PrefillChunkAtOffset) {
     Tensor qkv = to_device(arena_, qkv_h, DType::F16, {n, row});
     Tensor d_pos = to_device_i32(arena_, pos);
     Tensor q = arena_.allocate(DType::F16, {n, s.n_heads, s.head_dim});
-    kernels::split_qkv(qkv, bias, s.n_heads, s.n_kv_heads, q, k_cache, v_cache, d_pos, nullptr);
+    kernels::split_qkv(qkv, bias, s.n_heads, s.n_kv_heads, q, k_cache, v_cache, d_pos, Tensor(),
+                       nullptr);
 
     // Reference split: (value + bias) rounded to fp16, as the kernel does.
     auto r16 = [](float x) { return __half2float(__float2half(x)); };

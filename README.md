@@ -6,10 +6,10 @@ single-user inference** on a consumer laptop GPU. It loads Hugging Face checkpoi
 kernels, and serves the model through an **OpenAI-compatible HTTP API** so existing
 OpenAI clients and tools work against it unchanged.
 
-> **Status: early.** GPT-2 generates text end to end (`ography_cli`), matching HF
-> `transformers` layer by layer and token for token; the tokenizer matches HF `tokenizers`
-> exactly. The HTTP server and Llama-family models are still `OGRAPHY_TODO(...)` stubs that
-> abort with their file and line if called. See the [roadmap](#roadmap) for progress.
+> **Status: early.** GPT-2 and the Llama family (Llama 3.x, Qwen2/2.5, Mistral) run end to
+> end in `ography_cli`, matching HF `transformers` layer by layer and token for token, with
+> the tokenizer and chat templates matching HF exactly. The HTTP server is still an
+> `OGRAPHY_TODO(...)` stub. See the [roadmap](#roadmap) for progress.
 
 ---
 
@@ -112,7 +112,7 @@ ography/
 ├── src/                        # one static library per module: ography_<module>
 │   ├── core/                   # Tensor (non-owning view), DType, DeviceArena, CUDA_CHECK, logging
 │   ├── model/                  # config.json, mmapped safetensors, HF→engine weight mapping
-│   │   └── arch/               # model architectures (llama.{h,cpp})
+│   │   └── arch/               # model architectures (gpt2, llama: also Qwen2 / Mistral)
 │   ├── kernels/                # one .cu per kernel, all declared in kernels.h
 │   ├── kv_cache/               # contiguous per-layer KV cache, prefix reuse tracker
 │   ├── tokenizer/              # byte-level BPE, chat templates, incremental UTF-8 decoding
@@ -254,8 +254,7 @@ If CMake can't find `nvcc`, pass `-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
 
 ## Running
 
-> `ography_cli` works today with GPT-2. The server (step 7) and Llama-family models (step 3b)
-> still abort with a `TODO` message.
+> `ography_cli` works today. The server (step 7) still aborts with a `TODO` message.
 
 ### Server
 
@@ -299,7 +298,7 @@ proxy (e.g. Caddy) in front and set `--api-key`.
 
 ```sh
 ./build/apps/ography_cli --model models/gpt2                 # completion mode (no chat template)
-./build/apps/ography_cli --model models/qwen2.5-1.5b --temperature 0.7   # chat (after step 3b)
+./build/apps/ography_cli --model models/qwen2.5-1.5b --temperature 0.7   # chat
 ```
 
 Models with a chat template get a multi-turn chat (`/reset` clears it); models without one,
@@ -403,8 +402,10 @@ Progress is tracked here. The order matters: correctness before speed.
   fused QKV split into the KV cache, naive causal attention (GQA-ready), cuBLAS GEMM, each with tests
 - [x] **3. Forward pass (GPT-2):** `Gpt2Model::forward` with KV cache, prefill + decode, checked
   against a CPU fp32 reference
-- [ ] **3b. Llama:** RMSNorm, RoPE, SwiGLU kernels, `map_llama_weights`, `LlamaModel::forward`
-- [x] **4. Golden tests (GPT-2):** `dump_golden.py`, layer-by-layer agreement with HF, teacher-forced greedy
+- [x] **3b. Llama:** RMSNorm, RoPE (default / linear / llama3 scaling, fused into the QKV split),
+  SwiGLU, `map_llama_weights` (fused QKV and gate/up), `LlamaModel`. Llama 3.2 1B and Qwen2.5
+  1.5B match HF layer by layer and greedy token for token
+- [x] **4. Golden tests (GPT-2, Llama 3.2, Qwen2.5):** `dump_golden.py`, layer-by-layer agreement with HF, teacher-forced greedy
 - [x] **5. Tokenizer:** byte-level BPE (GPT-2, Llama 3, Qwen2 pretokenizers), special tokens,
   ChatML / Llama 3 chat templates, incremental UTF-8 decoding; all matching HF exactly
   (NFC normalization and tool calls not yet)
