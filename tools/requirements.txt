@@ -1,0 +1,6 @@
+# Offline tooling only; never used by the engine at runtime.
+torch
+transformers
+safetensors
+huggingface_hub
+numpy

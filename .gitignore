@@ -1,0 +1,57 @@
+# ---- Build output ----
+build/
+build-*/
+cmake-build-*/
+out/
+_deps/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+*.o
+*.obj
+*.a
+*.so
+*.ptx
+*.cubin
+*.fatbin
+
+# ---- Models, weights and generated data (large; never commit) ----
+models/
+golden/
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# ---- Profiling ----
+*.nsys-rep
+*.ncu-rep
+*.qdrep
+*.sqlite
+perf.data*
+
+# ---- Python tooling ----
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---- Editors / tools ----
+.cache/
+.clangd/
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# ---- Secrets ----
+.env
+*.key
+*.pem
