@@ -32,12 +32,16 @@ class Tokenizer {
   int32_t bos_id() const { return bos_id_; }  // -1 if the model has none
   const std::vector<int32_t>& eos_ids() const { return eos_ids_; }  // often several
   bool is_eos(int32_t id) const;
+  // tokenizer_config.json "add_bos_token": whether raw text prompts should start with BOS
+  // (true for Llama, false for Qwen and GPT-2).
+  bool add_bos() const { return add_bos_; }
 
  private:
   Tokenizer();
   std::unique_ptr<BpeModel> bpe_;
   int32_t bos_id_ = -1;
   std::vector<int32_t> eos_ids_;
+  bool add_bos_ = false;
 };
 
 // Turns a stream of token ids into text pieces that are always valid UTF-8.

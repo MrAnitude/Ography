@@ -60,6 +60,9 @@ Tokenizer Tokenizer::from_file(const std::string& tokenizer_json_path) {
     const auto c = read_json(dir / "tokenizer_config.json");
     if (t.bos_id_ < 0 && c.contains("bos_token")) t.bos_id_ = t.token_id(token_text(c["bos_token"]));
     if (c.contains("eos_token")) add_eos(t.token_id(token_text(c["eos_token"])));
+    if (c.contains("add_bos_token") && c["add_bos_token"].is_boolean()) {
+      t.add_bos_ = c["add_bos_token"].get<bool>();
+    }
   }
   return t;
 }

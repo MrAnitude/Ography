@@ -29,8 +29,9 @@ add_executable(model_tests
   model/test_arena.cpp
   model/test_gpt2_load.cpp
   model/test_gpt2_forward.cpp
-  model/test_engine.cpp)
-target_link_libraries(model_tests PRIVATE ography_engine GTest::gtest_main)
+  model/test_engine.cpp
+  model/test_server.cpp)
+target_link_libraries(model_tests PRIVATE ography_http GTest::gtest_main)
 target_compile_definitions(model_tests PRIVATE OGRAPHY_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 gtest_discover_tests(model_tests DISCOVERY_MODE PRE_TEST)
 

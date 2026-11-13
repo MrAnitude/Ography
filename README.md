@@ -7,9 +7,10 @@ kernels, and serves the model through an **OpenAI-compatible HTTP API** so exist
 OpenAI clients and tools work against it unchanged.
 
 > **Status: early.** GPT-2 and the Llama family (Llama 3.x, Qwen2/2.5, Mistral) run end to
-> end in `ography_cli`, matching HF `transformers` layer by layer and token for token, with
-> the tokenizer and chat templates matching HF exactly. The HTTP server is still an
-> `OGRAPHY_TODO(...)` stub. See the [roadmap](#roadmap) for progress.
+> end, matching HF `transformers` layer by layer and token for token, with the tokenizer and
+> chat templates matching HF exactly. They are served through an OpenAI-compatible API
+> (`ography_server`) or a terminal chat (`ography_cli`). Next up is latency work (prefix reuse,
+> CUDA graphs). See the [roadmap](#roadmap) for progress.
 
 ---
 
@@ -254,8 +255,6 @@ If CMake can't find `nvcc`, pass `-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
 
 ## Running
 
-> `ography_cli` works today. The server (step 7) still aborts with a `TODO` message.
-
 ### Server
 
 ```sh
@@ -267,11 +266,19 @@ If CMake can't find `nvcc`, pass `-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
 | `--model DIR` | Hugging Face model directory |
 | `--host`, `--port` | Bind address (defaults to `127.0.0.1:8000`, so it's local only) |
 | `--max-seq-len N` | Context length; default is as large as free VRAM allows |
-| `--fp8-kv` | Store the KV cache in FP8 (half the memory, so twice the context) |
-| `--no-cuda-graphs` | Disable decode graph capture (for debugging) |
-| `--api-key KEY` | Require `Authorization: Bearer KEY` |
+| `--prefill-chunk N` | Longest prompt slice per forward pass (default 2048) |
+| `--vram-fraction F` | Share of free VRAM to claim (default 0.92) |
+| `--api-key KEY` | Require `Authorization: Bearer KEY` on `/v1/*` (or set `OGRAPHY_API_KEY`) |
 
-Endpoints: `POST /v1/chat/completions`, `POST /v1/completions`, `GET /v1/models`, `GET /health`.
+Endpoints: `POST /v1/chat/completions`, `POST /v1/completions` (both streaming and not),
+`GET /v1/models`, `GET /health` (status plus request / in-flight / cancelled counters).
+
+Requests run one at a time on the GPU, in arrival order. Supported request fields: `messages`
+(text content), `prompt`, `max_tokens` / `max_completion_tokens` (default: as much as fits),
+`temperature`, `top_p`, `stop`, `seed`, `presence_penalty`, `frequency_penalty`, `stream`,
+`stream_options.include_usage`, plus vLLM-style `top_k`, `min_p`, `repetition_penalty`.
+Anything the engine can't honour (`n > 1`, tools, logprobs, images, JSON mode) is rejected
+with a 400 rather than ignored. Closing a streaming connection cancels generation.
 
 ```sh
 curl http://127.0.0.1:8000/v1/chat/completions \
@@ -411,7 +418,8 @@ Progress is tracked here. The order matters: correctness before speed.
   (NFC normalization and tool calls not yet)
 - [x] **6. Generation:** GPU sampling (greedy, temperature, top-k/p, min-p, penalties), stop
   strings/tokens, `Engine::generate` with VRAM-sized KV cache and chunked prefill, `ography_cli`
-- [ ] **7. Server:** OpenAI endpoints, SSE streaming, cancellation on disconnect
+- [x] **7. Server:** OpenAI chat / completions / models endpoints, SSE streaming, cancellation on
+  disconnect, API key auth; checked with the official `openai` Python SDK
 - [ ] **8. Latency:** prefix reuse across turns, CUDA-graph decode, fused add+RMSNorm
 - [ ] **9. Memory:** FP8 KV cache, INT4 weight loading (AWQ/GPTQ), FP8 weights
 - [ ] **10. Custom kernels:** FlashAttention-style prefill, split-K decode attention, W4A16 GEMV replacing cuBLAS for decode
