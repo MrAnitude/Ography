@@ -59,6 +59,8 @@ target_link_libraries(ography_model PUBLIC
 ography_module(tokenizer
   tokenizer/tokenizer.cpp
   tokenizer/bpe.cpp
+  tokenizer/pretokenizer.cpp
+  tokenizer/unicode.cpp
   tokenizer/chat_template.cpp)
 target_link_libraries(ography_tokenizer PUBLIC nlohmann_json::nlohmann_json)
 

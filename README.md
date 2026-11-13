@@ -7,9 +7,9 @@ kernels, and serves the model through an **OpenAI-compatible HTTP API** so exist
 OpenAI clients and tools work against it unchanged.
 
 > **Status: early.** GPT-2 runs end to end on the GPU (prefill + decode with a KV cache) and
-> matches HF `transformers` layer by layer. The tokenizer, generation loop, server and Llama
-> are still `OGRAPHY_TODO(...)` stubs that abort with their file and line if called. See the
-> [roadmap](#roadmap) for build order and progress.
+> matches HF `transformers` layer by layer; the tokenizer matches HF `tokenizers` exactly.
+> The generation loop, server and Llama are still `OGRAPHY_TODO(...)` stubs that abort with
+> their file and line if called. See the [roadmap](#roadmap) for build order and progress.
 
 ---
 
@@ -126,10 +126,13 @@ ography/
 ├── tests/
 │   ├── unit/                   # pure C++ logic (GoogleTest)
 │   ├── kernels/                # each kernel vs a CPU reference
-│   └── golden/                 # engine vs HF transformers, layer by layer
+│   ├── golden/                 # engine vs HF transformers, layer by layer
+│   └── data/tokenizer/         # HF encodings + chat renderings per tokenizer (checked in)
 ├── bench/                      # kernel microbenchmarks (cudaEvent timing)
 ├── tools/                      # Python, offline only
 │   ├── dump_golden.py          # dump HF reference tensors for tests/golden
+│   ├── dump_tokenizer_cases.py # dump HF tokenizer / chat-template fixtures for tests/data
+│   ├── gen_unicode_tables.py   # regenerate src/tokenizer/unicode_tables.inc
 │   ├── inspect_safetensors.py  # list tensor names / dtypes / shapes in a checkpoint
 │   └── requirements.txt
 ├── third_party/                # reserved for vendored deps (none yet)
@@ -154,7 +157,7 @@ tokenizer (CPU only) ◄── engine
 | `kv_cache` | `KVCache`, `PrefixTracker` | Per-layer K/V storage; reusing cached prompt prefixes |
 | `quant` | `QuantConfig`, `QuantizedWeight` | Describes quantized checkpoint formats |
 | `model` | `ModelConfig`, `SafetensorsModel`, `Gpt2Weights` / `LlamaWeights`, `Model` | Loading, mapping and running a transformer |
-| `tokenizer` | `Tokenizer`, `IncrementalDecoder`, `ChatTemplate` | Text ↔ token ids, prompt formatting |
+| `tokenizer` | `Tokenizer`, `IncrementalDecoder`, `ChatTemplate` | Text ↔ token ids (byte-level BPE, hand-written pretokenizers), prompt formatting |
 | `engine` | `Engine`, `SamplingParams`, `StopChecker`, `DecodeGraph`, `RequestQueue` | The prefill/decode loop and its control flow |
 | `server` | `HttpServer`, `openai::*`, `sse::*` | OpenAI-compatible HTTP surface |
 
@@ -312,6 +315,21 @@ ctest --test-dir build --output-on-failure
 
 Tests for unimplemented pieces are marked `GTEST_SKIP` and show as skipped, not failed.
 
+### Tokenizer tests
+
+`tests/data/tokenizer/<model>.json` holds ~350 strings (edge cases plus seeded random
+unicode) with the ids HF `tokenizers` produces, and chat conversations rendered by
+`apply_chat_template`. They need only the tokenizer files, not the weights:
+
+```sh
+tools/.venv/bin/hf download Qwen/Qwen2.5-1.5B-Instruct tokenizer.json tokenizer_config.json \
+    generation_config.json config.json --local-dir models/qwen2.5-1.5b
+tools/.venv/bin/hf download unsloth/Llama-3.2-1B-Instruct tokenizer.json tokenizer_config.json \
+    generation_config.json config.json --local-dir models/llama3.2-1b
+# regenerate a fixture (e.g. after changing the test strings):
+tools/.venv/bin/python tools/dump_tokenizer_cases.py --model models/gpt2 --out tests/data/tokenizer/gpt2.json
+```
+
 ### Golden tests
 
 Golden tests catch the subtle bugs that make a model produce fluent nonsense: wrong RoPE
@@ -379,7 +397,9 @@ Progress is tracked here. The order matters: correctness before speed.
   against a CPU fp32 reference
 - [ ] **3b. Llama:** RMSNorm, RoPE, SwiGLU kernels, `map_llama_weights`, `LlamaModel::forward`
 - [x] **4. Golden tests (GPT-2):** `dump_golden.py`, layer-by-layer agreement with HF, teacher-forced greedy
-- [ ] **5. Tokenizer:** byte-level BPE, special tokens, chat templates, incremental decoding
+- [x] **5. Tokenizer:** byte-level BPE (GPT-2, Llama 3, Qwen2 pretokenizers), special tokens,
+  ChatML / Llama 3 chat templates, incremental UTF-8 decoding; all matching HF exactly
+  (NFC normalization and tool calls not yet)
 - [ ] **6. Generation:** sampling kernels, stop handling, `Engine::generate`, `ography_cli`
 - [ ] **7. Server:** OpenAI endpoints, SSE streaming, cancellation on disconnect
 - [ ] **8. Latency:** prefix reuse across turns, CUDA-graph decode, fused add+RMSNorm

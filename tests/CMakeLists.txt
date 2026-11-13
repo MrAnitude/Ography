@@ -10,6 +10,7 @@ add_executable(unit_tests
   unit/test_stop_checker.cpp
   unit/test_openai_api.cpp)
 target_link_libraries(unit_tests PRIVATE ography_http GTest::gtest_main)
+target_compile_definitions(unit_tests PRIVATE OGRAPHY_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 gtest_discover_tests(unit_tests DISCOVERY_MODE PRE_TEST)
 
 # Kernel tests: each kernel against a straightforward CPU reference. Needs the GPU.
