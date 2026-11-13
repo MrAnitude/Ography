@@ -145,7 +145,7 @@ TEST(Int4, GemmMatchesCpu) {
     const size_t mark = arena.mark();
     const Int4Weight w = random_weight(s.out, s.in, s.group, s.out + s.in);
     const EngineInt4 e = repack_on_gpu(arena, w, Int4Source::AWQ);
-    for (int T : {1, 5}) {
+    for (int T : {1, 3, 8, 13}) {
       const auto x = random_f16_values(size_t(T) * s.in, T, -1.f, 1.f);
       std::vector<float> want(size_t(T) * s.out);
       double max_ref = 0;

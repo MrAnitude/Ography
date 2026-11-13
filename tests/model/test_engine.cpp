@@ -115,15 +115,21 @@ TEST_F(EngineTest, CallbackCancels) {
   EXPECT_EQ(generate(*engine_, prompt_, greedy(32)).ids, kHfGreedy);
 }
 
+// The same seed reproduces the same tokens from the same cache state. (With a warm cache the
+// prompt's last token is prefilled alone, a different GEMM shape whose rounding can flip a
+// near-tie draw, so reproducibility is per cache state, like OpenAI's "best effort" seed.)
 TEST_F(EngineTest, SeededSamplingIsReproducible) {
   SamplingParams sp;
   sp.temperature = 0.9f;
   sp.top_p = 0.95f;
   sp.max_tokens = 24;
   sp.seed = 1234;
+  engine_->clear_cache();
   const GenRun a = generate(*engine_, prompt_, sp);
+  engine_->clear_cache();
   EXPECT_EQ(a.ids, generate(*engine_, prompt_, sp).ids);
   sp.seed = 999;
+  engine_->clear_cache();
   EXPECT_NE(a.ids, generate(*engine_, prompt_, sp).ids);
   std::printf("    seed 1234: \"%s\"\n", a.text.c_str());
 }

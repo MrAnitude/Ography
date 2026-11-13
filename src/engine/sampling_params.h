@@ -19,6 +19,7 @@ struct SamplingParams {
   int max_tokens = 512;
   std::vector<std::string> stop;      // stop strings
   std::vector<int32_t> stop_token_ids;  // in addition to the model's EOS ids
+  bool ignore_eos = false;  // keep going past the model's EOS ids (benchmarks)
 };
 
 }  // namespace ography

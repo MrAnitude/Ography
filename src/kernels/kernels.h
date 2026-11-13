@@ -71,10 +71,14 @@ void split_qkv(const Tensor& qkv, const Tensor& qkv_bias, int n_heads, int n_kv_
 void attention_prefill(const Tensor& q, const Tensor& k_cache, const Tensor& v_cache,
                        const Tensor& positions, float scale, Tensor& out, cudaStream_t stream);
 
-// Single-token decode (T == 1). Same contract as attention_prefill; currently the same naive
-// kernel, to be replaced by split-K / flash-decoding.
+// Single-token decode (T == 1). Same contract as attention_prefill. Split-K over the sequence
+// with all query heads of a GQA group per block (head_dim 64 / 128, group <= 8; otherwise the
+// naive kernel). scratch: f32, at least attention_decode_scratch_floats() elements, for the
+// per-split partial results. Graph-replayable: the launch depends only on the cache capacity.
 void attention_decode(const Tensor& q, const Tensor& k_cache, const Tensor& v_cache,
-                      const Tensor& positions, float scale, Tensor& out, cudaStream_t stream);
+                      const Tensor& positions, float scale, Tensor& out, Tensor& scratch,
+                      cudaStream_t stream);
+size_t attention_decode_scratch_floats(int n_heads, int head_dim, int max_seq);
 
 // out = x @ W^T. x [T, in] fp16; weight [out, in] fp16; out [T, out] fp16 or fp32.
 // cuBLAS for now (fp32 accumulation); a custom GEMM / GEMV can replace this later.

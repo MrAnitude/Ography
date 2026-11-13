@@ -30,6 +30,7 @@ ography_module(kernels
   kernels/qkv.cu
   kernels/swiglu.cu
   kernels/attention_prefill.cu
+  kernels/attention_flash.cu
   kernels/attention_decode.cu
   kernels/gemm.cu
   kernels/sampling.cu
@@ -39,7 +40,7 @@ target_link_libraries(ography_kernels PUBLIC ography_core CUDA::cublas)
 ography_module(kv_cache
   kv_cache/kv_cache.cpp
   kv_cache/prefix_reuse.cpp)
-target_link_libraries(ography_kv_cache PUBLIC ography_core)
+target_link_libraries(ography_kv_cache PUBLIC ography_core ography_kernels)
 
 ography_module(quant
   quant/quant_config.cpp)

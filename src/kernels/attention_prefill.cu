@@ -6,7 +6,8 @@
 // merged at the end. Memory use doesn't grow with sequence length, so this works for any
 // context size. Everything is accumulated in fp32.
 //
-// TODO: FlashAttention-2 style tiled prefill (roadmap step 10).
+// Prefill uses the tensor-core flash kernel (attention_flash.cu) where it applies; this kernel
+// covers other head sizes, and decode for now.
 
 #include <cmath>
 
@@ -109,9 +110,8 @@ __global__ void attention_naive_kernel(const __half* __restrict__ q,
 
 }  // namespace
 
-void attention_naive(const Tensor& q, const Tensor& k_cache, const Tensor& v_cache,
-                     const Tensor& positions, float scale, Tensor& out, cudaStream_t stream,
-                     const char* fn) {
+void check_attention(const Tensor& q, const Tensor& k_cache, const Tensor& v_cache,
+                     const Tensor& positions, const Tensor& out, const char* fn) {
   check_cuda(q, DType::F16, fn, "q");
   check(k_cache.device() == Device::CUDA &&
             (k_cache.dtype() == DType::F16 || k_cache.dtype() == DType::FP8_E4M3),
@@ -131,6 +131,17 @@ void attention_naive(const Tensor& q, const Tensor& k_cache, const Tensor& v_cac
   check(n_kv_heads > 0 && n_heads % n_kv_heads == 0, fn, "n_heads must be a multiple of n_kv_heads");
   check(head_dim % 32 == 0 && head_dim <= 256, fn, "head_dim must be a multiple of 32, <= 256");
   check(positions.ndim() == 1 && positions.dim(0) == T, fn, "positions must be [T]");
+}
+
+void attention_naive(const Tensor& q, const Tensor& k_cache, const Tensor& v_cache,
+                     const Tensor& positions, float scale, Tensor& out, cudaStream_t stream,
+                     const char* fn) {
+  check_attention(q, k_cache, v_cache, positions, out, fn);
+  const int T = static_cast<int>(q.dim(0));
+  const int n_heads = static_cast<int>(q.dim(1));
+  const int head_dim = static_cast<int>(q.dim(2));
+  const int n_kv_heads = static_cast<int>(k_cache.dim(1));
+  const int max_seq = static_cast<int>(k_cache.dim(0));
   if (T == 0) return;
 
   const dim3 grid(n_heads, T);
@@ -164,6 +175,9 @@ void attention_naive(const Tensor& q, const Tensor& k_cache, const Tensor& v_cac
 
 void attention_prefill(const Tensor& q, const Tensor& k_cache, const Tensor& v_cache,
                        const Tensor& positions, float scale, Tensor& out, cudaStream_t stream) {
+  detail::check_attention(q, k_cache, v_cache, positions, out, "attention_prefill");
+  if (q.dim(0) == 0) return;
+  if (detail::attention_flash(q, k_cache, v_cache, positions, scale, out, stream)) return;
   detail::attention_naive(q, k_cache, v_cache, positions, scale, out, stream,
                           "attention_prefill");
 }

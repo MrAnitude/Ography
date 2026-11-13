@@ -1,6 +1,8 @@
 #include "kv_cache/kv_cache.h"
 
 #include <stdexcept>
+
+#include "kernels/kernels.h"
 #include <string>
 
 namespace ography {
@@ -20,6 +22,15 @@ KVCache::KVCache(const KVCacheConfig& config, DeviceArena& arena) : config_(conf
     k_.push_back(arena.allocate(config.dtype, shape));
     v_.push_back(arena.allocate(config.dtype, shape));
   }
+  if (config.num_q_heads > 0) {
+    decode_scratch_ = arena.allocate(DType::F32, {int64_t(scratch_bytes(config) / 4)});
+  }
+}
+
+size_t KVCache::scratch_bytes(const KVCacheConfig& config) {
+  if (config.num_q_heads <= 0) return 0;
+  return 4 * kernels::attention_decode_scratch_floats(config.num_q_heads, config.head_dim,
+                                                      config.max_seq_len);
 }
 
 void KVCache::advance(int n_tokens) {

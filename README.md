@@ -285,7 +285,9 @@ Requests run one at a time on the GPU, in arrival order. Supported request field
 `temperature`, `top_p`, `stop`, `seed`, `presence_penalty`, `frequency_penalty`, `stream`,
 `stream_options.include_usage`, plus vLLM-style `top_k`, `min_p`, `repetition_penalty`.
 Anything the engine can't honour (`n > 1`, tools, logprobs, images, JSON mode) is rejected
-with a 400 rather than ignored. Closing a streaming connection cancels generation.
+with a 400 rather than ignored. Closing a streaming connection cancels generation. `seed`
+reproduces outputs for the same request from the same cache state; with a warm prefix cache
+the rounding can differ slightly, so like OpenAI's it is best effort.
 
 ```sh
 curl http://127.0.0.1:8000/v1/chat/completions \
@@ -389,9 +391,18 @@ tools/.venv/bin/python tools/dump_golden.py --model models/qwen2.5-1.5b-awq \
 ./build/bench/bench_kernels
 ```
 
-`ography_bench` reports time-to-first-token, time per output token, tokens/s and peak VRAM.
-`bench_kernels` reports achieved bandwidth per kernel. Compare it against the ~256 GB/s
-peak to see how close each decode kernel is to its limit.
+`ography_bench` feeds a random prompt (cold cache each iteration), generates greedily past
+EOS, and reports the median time to first token, decode tokens/s and GPU memory in use.
+`bench_kernels [filter]` times attention (prefill and decode) and the INT4 GEMMs on real
+model shapes and reports TFLOPS or achieved bandwidth (peak ~256 GB/s).
+
+Measured (`--gen-len 128`, cold cache):
+
+| Model | TTFT, 512-token prompt | TTFT, 4096 | Decode (512 / 4096 context) | GPU memory |
+|---|---|---|---|---|
+| Llama 3.2 1B, fp16 | 33 ms | 303 ms | 95 / 90 tok/s | 2.7 GB |
+| Qwen2.5 1.5B, AWQ | 61 ms | 471 ms | 162 / 155 tok/s | 1.4 GB |
+| Qwen2.5 7B, AWQ | 303 ms | 2.3 s | 48 / 46 tok/s | 5.8 GB |
 
 For deeper analysis:
 
@@ -455,9 +466,13 @@ Progress is tracked here. The order matters: correctness before speed.
   prefill. Qwen2.5 7B AWQ runs in 8 GB at 48 tok/s; the 1.5B AWQ/GPTQ models match their
   dequantized HF reference layer by layer
 - [ ] **9b. Deferred:** FP8 weights (compressed-tensors), act-order GPTQ, calibrated FP8 KV scales
-- [ ] **10. Custom kernels:** FlashAttention-style prefill, split-K decode attention, W4A16 GEMV replacing cuBLAS for decode.
-  Priority: the naive attention dominates at long context (Llama 3.2 1B at ~5.6K tokens:
-  prefill ~2K tok/s, decode 93 -> 42 tok/s)
+- [x] **10. Custom kernels:** tensor-core (WMMA) FlashAttention-2 prefill (15-28x the naive
+  kernel, 20-25 TFLOPS), split-K decode attention with GQA grouping (5-6x, 150-200 GB/s),
+  multi-token INT4 GEMV for prefills of <= 8 tokens. A 5.7K-token document on Qwen2.5 7B
+  AWQ: prefill 8.5 s -> 3.3 s, decode at that length 23 -> 44 tok/s
+- [ ] **10b. Next kernels:** a fused tensor-core W4A16 GEMM for 9-100-token INT4 prefills
+  (now ~60 ms flat on 7B via dequant + cuBLAS); decode attention for large GQA groups is
+  compute-bound (Qwen 7B: 150 vs 200 GB/s)
 - [ ] **11. Stretch:** speculative decoding (draft model / n-gram), structured (JSON) output
 
 ## Conventions

@@ -79,6 +79,13 @@ __global__ void dequant_kernel(const uint32_t* __restrict__ qweight,
 }
 
 constexpr int kGemvWarps = 8;  // output rows per block
+// Up to this many tokens, INT4 GEMMs run as multi-token GEMVs (weights read once per 8 tokens)
+// rather than dequant + cuBLAS. From bench_kernels on Qwen2.5 7B (ms per model's linears):
+//   T:            1     2     4     8    12    16    32
+//   multi-token  13    13    24    47    73    95   159   (compute-bound past T=2: x loads)
+//   dequant      60    60    61    62    63    64    60   (flat: fp16 tiles through L2)
+// TODO: a fused tensor-core W4A16 GEMM would beat both for mid-size T (most chat turns).
+constexpr int kMultiTokenMax = 8;
 
 // y[o] = sum_i W[o, i] x[i], one warp per output row. x lives in shared memory (fp16). Each
 // lane loads 16 bytes of packed weights (32 inputs) per step, so a warp streams 512
@@ -123,6 +130,61 @@ __global__ void __launch_bounds__(kGemvWarps * 32)
   }
   acc = warp_sum(acc);
   if (lane == 0) y[o] = __float2half(acc);
+}
+
+// Like gemv_w4a16_kernel for up to kT tokens per pass over the weights: each 32-weight chunk
+// is dequantized once into registers and reused for every token. x [n, in] is read straight
+// from global memory (it stays in L1/L2: at most kT * in * 2 bytes).
+template <int kT>
+__global__ void __launch_bounds__(kGemvWarps * 32)
+    gemv_w4a16_multi_kernel(const __half* __restrict__ x, int n, const uint4* __restrict__ qweight,
+                            const __half* __restrict__ scales, const __half* __restrict__ zeros,
+                            int in, int out, int groups, int group_size, __half* __restrict__ y) {
+  const int lane = threadIdx.x % 32;
+  const int o = blockIdx.x * kGemvWarps + threadIdx.x / 32;
+  if (o >= out) return;
+  const int chunks = in / 32;
+  const uint4* row = qweight + static_cast<size_t>(o) * chunks;
+  const __half* row_s = scales + static_cast<size_t>(o) * groups;
+  const __half* row_z = zeros + static_cast<size_t>(o) * groups;
+
+  float acc[kT] = {};
+  for (int c = lane; c < chunks; c += 32) {
+    const uint4 w4 = row[c];
+    const uint32_t words[4] = {w4.x, w4.y, w4.z, w4.w};
+    float wq[32];
+#pragma unroll
+    for (int j = 0; j < 4; ++j)
+#pragma unroll
+      for (int k = 0; k < 8; ++k) wq[j * 8 + k] = static_cast<float>(nibble(words[j], k));
+    const int g = 32 * c / group_size;
+    const float sc = __half2float(row_s[g]);
+    const float zc = __half2float(row_z[g]);
+#pragma unroll
+    for (int t = 0; t < kT; ++t) {
+      if (t >= n) break;
+      const uint4* xp = reinterpret_cast<const uint4*>(x + static_cast<size_t>(t) * in + 32 * c);
+      float qx = 0.f, sx = 0.f;
+#pragma unroll
+      for (int j = 0; j < 4; ++j) {
+        const uint4 xv = __ldg(xp + j);
+        const __half2* h2 = reinterpret_cast<const __half2*>(&xv);
+#pragma unroll
+        for (int k = 0; k < 4; ++k) {
+          const float2 f = __half22float2(h2[k]);
+          qx += wq[j * 8 + 2 * k] * f.x + wq[j * 8 + 2 * k + 1] * f.y;
+          sx += f.x + f.y;
+        }
+      }
+      acc[t] += sc * (qx - zc * sx);
+    }
+  }
+#pragma unroll
+  for (int t = 0; t < kT; ++t) {
+    if (t >= n) break;
+    const float v = warp_sum(acc[t]);
+    if (lane == 0) y[static_cast<size_t>(t) * out + o] = __float2half(v);
+  }
 }
 
 void check_int4(const Tensor& qweight, const Tensor& scales, const Tensor& zeros, int group_size,
@@ -221,6 +283,27 @@ void gemm_w4a16(cublasHandle_t handle, const Tensor& x, const Tensor& qweight,
         zeros.data_as<const __half>(), in, n_out, static_cast<int>(scales.dim(1)), group_size,
         out.data_as<__half>());
     CUDA_CHECK_LAUNCH();
+    return;
+  }
+
+  if (T <= kMultiTokenMax) {
+    // Short prefill: a few tokens per pass over the packed weights.
+    const unsigned blocks = (n_out + kGemvWarps - 1) / kGemvWarps;
+    for (int t0 = 0; t0 < T; t0 += 8) {
+      const int n = std::min(8, T - t0);
+      const __half* xp = x.data_as<const __half>() + static_cast<size_t>(t0) * in;
+      __half* yp = out.data_as<__half>() + static_cast<size_t>(t0) * n_out;
+      auto launch = [&](auto kernel) {
+        kernel<<<blocks, kGemvWarps * 32, 0, stream>>>(
+            xp, n, qweight.data_as<const uint4>(), scales.data_as<const __half>(),
+            zeros.data_as<const __half>(), in, n_out, static_cast<int>(scales.dim(1)), group_size,
+            yp);
+      };
+      if (n <= 2) launch(gemv_w4a16_multi_kernel<2>);
+      else if (n <= 4) launch(gemv_w4a16_multi_kernel<4>);
+      else launch(gemv_w4a16_multi_kernel<8>);
+      CUDA_CHECK_LAUNCH();
+    }
     return;
   }
 

@@ -146,14 +146,16 @@ Engine::Engine(const EngineConfig& config) : impl_(std::make_unique<Impl>()) {
   if (config.max_seq_len > 0) want_ctx = std::min(want_ctx, config.max_seq_len);
   m.chunk = std::max(1, std::min(config.prefill_chunk, want_ctx));
   KVCacheConfig kvc{mc.num_layers, mc.num_kv_heads, mc.head_dim, 0,
-                    config.fp8_kv_cache ? DType::FP8_E4M3 : DType::F16};
+                    config.fp8_kv_cache ? DType::FP8_E4M3 : DType::F16, mc.num_heads};
   const size_t kv_per_token = KVCache::bytes_per_token(kvc);
   if (config.fp8_kv_cache && mc.attention_bias && mc.model_type != "gpt2") {
     log(LogLevel::Warn,
         "--fp8-kv loses noticeable accuracy on models with q/k/v biases (Qwen2): their K "
         "values have large outlier channels that E4M3 can't represent precisely");
   }
-  const size_t fixed = estimate_weight_bytes(config.model_dir, mc) +
+  KVCacheConfig full = kvc;
+  full.max_seq_len = want_ctx;
+  const size_t fixed = KVCache::scratch_bytes(full) + estimate_weight_bytes(config.model_dir, mc) +
                        estimate_scratch_bytes(mc, m.chunk) + 64 * kMiB;
   const size_t budget = static_cast<size_t>(config.vram_fraction * query_free_device_memory());
   const size_t min_ctx = std::min(want_ctx, 256);
@@ -190,7 +192,11 @@ Engine::Engine(const EngineConfig& config) : impl_(std::make_unique<Impl>()) {
   CUDA_CHECK(cudaMemsetAsync(m.d_output_counts.data(), 0, m.d_output_counts.nbytes(), m.stream));
 
   // Whatever is left (less alignment slack) goes to the KV cache.
-  const size_t left = m.arena->capacity() - m.arena->used() - kMiB;
+  // Decode scratch also grows with capacity; it is at most ~1% of the cache, so reserve its
+  // size for the full-context case and size the cache from the rest.
+  KVCacheConfig probe = kvc;
+  probe.max_seq_len = want_ctx;
+  const size_t left = m.arena->capacity() - m.arena->used() - kMiB - KVCache::scratch_bytes(probe);
   kvc.max_seq_len = static_cast<int>(std::min<size_t>(want_ctx, left / kv_per_token));
   m.kv = std::make_unique<KVCache>(kvc, *m.arena);
 

@@ -156,7 +156,8 @@ class Gpt2Forward : public ::testing::Test {
     arena_ = std::make_unique<DeviceArena>(size_t{768} << 20);
     model_ = load_model(gpt2_dir(), *arena_, cublas_);
     const auto& c = model_->config();
-    KVCacheConfig kv{c.num_layers, c.num_kv_heads, c.head_dim, c.max_position_embeddings};
+    KVCacheConfig kv{c.num_layers, c.num_kv_heads, c.head_dim, c.max_position_embeddings,
+                     DType::F16, c.num_heads};
     kv_ = std::make_unique<KVCache>(kv, *arena_);
     d_ids_ = arena_->allocate(DType::I32, {64});
     d_pos_ = arena_->allocate(DType::I32, {64});

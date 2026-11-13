@@ -13,6 +13,7 @@ struct KVCacheConfig {
   int head_dim = 0;
   int max_seq_len = 0;          // sized at startup from free VRAM after weights load
   DType dtype = DType::F16;     // or FP8_E4M3 (unscaled): half the memory, twice the context
+  int num_q_heads = 0;          // query heads; if set, decode-attention scratch is allocated
 };
 
 // One contiguous [max_seq_len, num_kv_heads, head_dim] K and V buffer per layer.
@@ -32,9 +33,16 @@ class KVCache {
 
   static size_t bytes_per_token(const KVCacheConfig& config);
 
+  // Scratch for kernels::attention_decode over this cache (empty if num_q_heads wasn't set,
+  // in which case decode attention falls back to the naive kernel).
+  Tensor& decode_scratch() { return decode_scratch_; }
+  // Bytes of decode scratch a cache of this config allocates.
+  static size_t scratch_bytes(const KVCacheConfig& config);
+
  private:
   KVCacheConfig config_;
   std::vector<Tensor> k_, v_;
+  Tensor decode_scratch_;
   int seq_len_ = 0;
 };
 

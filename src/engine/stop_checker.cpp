@@ -5,7 +5,7 @@
 namespace ography {
 
 StopChecker::StopChecker(const SamplingParams& params, std::vector<int32_t> eos_ids)
-    : params_(params), stop_ids_(std::move(eos_ids)) {
+    : params_(params), stop_ids_(params.ignore_eos ? std::vector<int32_t>{} : std::move(eos_ids)) {
   stop_ids_.insert(stop_ids_.end(), params.stop_token_ids.begin(), params.stop_token_ids.end());
   // An empty stop string would match immediately; ignore it as OpenAI does.
   auto& stop = params_.stop;
