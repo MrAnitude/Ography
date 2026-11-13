@@ -15,6 +15,7 @@ gtest_discover_tests(unit_tests DISCOVERY_MODE PRE_TEST)
 # Kernel tests: each kernel against a straightforward CPU reference. Needs the GPU.
 add_executable(kernel_tests
   kernels/test_rmsnorm.cpp
+  kernels/test_elementwise.cpp
   kernels/test_attention.cpp)
 target_link_libraries(kernel_tests PRIVATE ography_kernels GTest::gtest_main)
 gtest_discover_tests(kernel_tests DISCOVERY_MODE PRE_TEST)
@@ -23,7 +24,8 @@ gtest_discover_tests(kernel_tests DISCOVERY_MODE PRE_TEST)
 # tests skip themselves if models/gpt2 (or $OGRAPHY_GPT2_DIR) is absent.
 add_executable(model_tests
   model/test_arena.cpp
-  model/test_gpt2_load.cpp)
+  model/test_gpt2_load.cpp
+  model/test_gpt2_forward.cpp)
 target_link_libraries(model_tests PRIVATE ography_model GTest::gtest_main)
 target_compile_definitions(model_tests PRIVATE OGRAPHY_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 gtest_discover_tests(model_tests DISCOVERY_MODE PRE_TEST)

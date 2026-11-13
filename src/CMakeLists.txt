@@ -25,6 +25,9 @@ target_link_libraries(ography_core PUBLIC CUDA::cudart)
 ography_module(kernels
   kernels/embedding.cu
   kernels/rmsnorm.cu
+  kernels/layernorm.cu
+  kernels/gelu.cu
+  kernels/qkv.cu
   kernels/rope.cu
   kernels/swiglu.cu
   kernels/attention_prefill.cu
@@ -48,7 +51,8 @@ ography_module(model
   model/safetensors.cpp
   model/weight_map.cpp
   model/registry.cpp
-  model/arch/llama.cpp)
+  model/arch/llama.cpp
+  model/arch/gpt2.cpp)
 target_link_libraries(ography_model PUBLIC
   ography_core ography_kernels ography_kv_cache ography_quant nlohmann_json::nlohmann_json)
 

@@ -78,7 +78,7 @@ around them.
           ┌───────────────────────────┼─────────────────────────────┐
           ▼                           ▼                             ▼
    PrefixTracker               Model::forward                  sampling kernel
-   (reuse KV from the          (LlamaModel: embedding →        (penalties, temperature,
+   (reuse KV from the          (Gpt2Model / LlamaModel:        (penalties, temperature,
     previous chat turn)          N × decoder layer →            top-k/p, min-p; result
           │                      final norm → lm_head)          stays on the GPU)
           ▼                           │
@@ -149,7 +149,7 @@ tokenizer (CPU only) ◄── engine
 | Module | Key types | Responsibility |
 |---|---|---|
 | `core` | `Tensor`, `DType`, `DeviceArena` | Memory views, one-shot GPU allocation, error handling |
-| `kernels` | `kernels::rmsnorm`, `attention_decode`, `gemm`, … | All GPU compute. Async, stream-ordered, CUDA-graph safe |
+| `kernels` | `kernels::layernorm`, `split_qkv`, `attention_prefill`, `gemm`, … | All GPU compute. Async, stream-ordered, CUDA-graph safe |
 | `kv_cache` | `KVCache`, `PrefixTracker` | Per-layer K/V storage; reusing cached prompt prefixes |
 | `quant` | `QuantConfig`, `QuantizedWeight` | Describes quantized checkpoint formats |
 | `model` | `ModelConfig`, `SafetensorsModel`, `Gpt2Weights` / `LlamaWeights`, `Model` | Loading, mapping and running a transformer |
@@ -364,8 +364,11 @@ Progress is tracked here. The order matters: correctness before speed.
 
 - [x] **1. Foundations:** `Tensor`, `DeviceArena`, safetensors loader, `ModelConfig`, GPT-2 weight mapping
   (Llama weight mapping comes with the Llama model)
-- [ ] **2. Kernels:** embedding, RMSNorm, RoPE, SwiGLU, attention (naive first), cuBLAS GEMM, each with tests
-- [ ] **3. Forward pass:** `LlamaModel::forward` with KV cache, prefill + decode
+- [x] **2. Kernels (GPT-2):** embedding + positions, LayerNorm, fused add+LayerNorm, bias+GELU,
+  fused QKV split into the KV cache, naive causal attention (GQA-ready), cuBLAS GEMM, each with tests
+- [x] **3. Forward pass (GPT-2):** `Gpt2Model::forward` with KV cache, prefill + decode, checked
+  against a CPU fp32 reference
+- [ ] **3b. Llama:** RMSNorm, RoPE, SwiGLU kernels, `map_llama_weights`, `LlamaModel::forward`
 - [ ] **4. Golden tests:** `dump_golden.py`, then layer-by-layer agreement with HF
 - [ ] **5. Tokenizer:** byte-level BPE, special tokens, chat templates, incremental decoding
 - [ ] **6. Generation:** sampling kernels, stop handling, `Engine::generate`, `ography_cli`

@@ -11,7 +11,7 @@ namespace ography {
 // Llama-family decoder (also covers Mistral and Qwen2, which differ only in config:
 // GQA ratio, rope settings, q/k/v bias, tied embeddings).
 //
-// Per layer:  x -> add_rmsnorm -> wqkv -> rope -> kv_cache_write -> attention -> wo
+// Per layer:  x -> add_rmsnorm -> wqkv -> split_qkv (+rope) -> attention -> wo
 //               -> add_rmsnorm -> w_gate_up -> swiglu -> w_down
 class LlamaModel final : public Model {
  public:
